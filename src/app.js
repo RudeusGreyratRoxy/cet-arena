@@ -1,0 +1,1330 @@
+'use strict';
+
+const http = require('http');
+const path = require('path');
+const crypto = require('crypto');
+const express = require('express');
+const compression = require('compression');
+const { Server } = require('socket.io');
+const { loadWords, buildQuestions } = require('./wordBank');
+const { APP_VERSION } = require('./version');
+
+const DEFAULT_CONFIG = {
+  questionMs: 15_000,
+  revealMs: 1_800,
+  startDelayMs: 900,
+  racePenaltyMs: 1_000,
+  raceAdvanceDelayMs: 250,
+  roomTtlMs: 30 * 60 * 1000,
+  cleanupIntervalMs: 60 * 1000,
+  maxNicknameLength: 20,
+};
+
+const SESSION_MISSING = 'SESSION_MISSING';
+
+/**
+ * 创建完整的 HTTP + Socket.IO 服务，但不自动 listen，便于测试。
+ */
+function createArenaServer(options = {}) {
+  const config = { ...DEFAULT_CONFIG, ...options };
+  const words = options.words || loadWords();
+  const app = express();
+  const httpServer = http.createServer(app);
+  const io = new Server(httpServer, {
+    serveClient: true,
+    pingInterval: 25_000,
+    pingTimeout: 30_000,
+    upgradeTimeout: 10_000,
+    transports: ['websocket', 'polling'],
+    maxHttpBufferSize: 1e5,
+  });
+
+  // 防止旧版前端在新版后端上继续运行，导致题型字段与渲染逻辑错配。
+  io.use((socket, next) => {
+    if (socket.handshake.auth?.clientVersion !== APP_VERSION) {
+      const error = new Error('客户端版本已更新，请刷新页面');
+      error.data = { code: 'CLIENT_OUTDATED', version: APP_VERSION };
+      next(error);
+      return;
+    }
+    next();
+  });
+
+  /** @type {Map<string, Room>} */
+  const rooms = new Map();
+  /** @type {Map<string, { roomCode: string, playerId: string }>} */
+  const sessions = new Map();
+  /** @type {Map<string, { roomCode: string, playerId: string }>} */
+  const socketPlayers = new Map();
+
+  app.disable('x-powered-by');
+  app.set('trust proxy', 1);
+  app.use(compression({ threshold: 1024 }));
+  app.use((req, res, next) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('Referrer-Policy', 'no-referrer');
+    res.setHeader(
+      'Content-Security-Policy',
+      "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; " +
+        "img-src 'self' data:; font-src 'self'; connect-src 'self' ws: wss:; " +
+        "base-uri 'self'; form-action 'self'"
+    );
+    next();
+  });
+
+  app.get('/healthz', (req, res) => {
+    res.json({
+      ok: true,
+      rooms: rooms.size,
+      players: [...rooms.values()].reduce((sum, room) => sum + room.players.length, 0),
+      words: words.length,
+      version: APP_VERSION,
+      uptimeSeconds: Math.round(process.uptime()),
+    });
+  });
+
+  const publicDir = path.join(__dirname, '..', 'public');
+  const indexFile = path.join(publicDir, 'index.html');
+  app.get('/', (req, res) => {
+    res.setHeader('Cache-Control', 'no-cache');
+    res.sendFile(indexFile);
+  });
+  app.use(
+    express.static(publicDir, {
+      index: false,
+      maxAge: '7d',
+      etag: true,
+    })
+  );
+  app.use((req, res) => {
+    res.setHeader('Cache-Control', 'no-cache');
+    res.status(404).sendFile(indexFile);
+  });
+
+  function publicPlayers(room) {
+    return room.players.map((player) => ({
+      id: player.id,
+      nickname: player.nickname,
+      ready: player.ready,
+      score: player.score,
+      connected: player.connected,
+      isHost: player.id === room.hostId,
+    }));
+  }
+
+  function questionView(room) {
+    const game = room.game;
+    const question = game && game.question;
+    if (!question) return null;
+    return {
+      index: game.index + 1,
+      total: game.questions.length,
+      type: question.type,
+      prompt: question.prompt,
+      promptLabel: question.promptLabel,
+      word: question.word,
+      level: question.level,
+      options: question.options,
+      deadline: question.deadline,
+      serverNow: Date.now(),
+      answers: Object.entries(question.answers).map(([playerId, answer]) => ({
+        playerId,
+        selectedIndex: answer.selectedIndex,
+        correct: answer.correct,
+      })),
+    };
+  }
+
+  function roomView(room) {
+    const view = {
+      code: room.code,
+      hostId: room.hostId,
+      level: room.level,
+      mode: room.mode,
+      status: room.status,
+      maxPlayers: 2,
+      createdAt: room.createdAt,
+      players: publicPlayers(room),
+      game: null,
+    };
+
+    if (room.game) {
+      if (room.game.mode === 'race') {
+        view.game = {
+          mode: 'race',
+          total: room.game.questions.length,
+          startedAt: room.game.startedAt,
+          progress: raceProgress(room),
+          final: room.game.final,
+        };
+      } else {
+        view.game = {
+          mode: 'quiz',
+          index: Math.max(1, room.game.index + 1),
+          total: room.game.questions.length,
+          question: questionView(room),
+          result: room.game.lastResult,
+          final: room.game.final,
+        };
+      }
+    }
+    return view;
+  }
+
+  function broadcastRoom(room) {
+    io.to(room.code).emit('room:state', roomView(room));
+  }
+
+  function findContext(socket) {
+    const room = rooms.get(socket.data.roomCode);
+    if (!room) return null;
+    const player = room.players.find(
+      (candidate) => candidate.id === socket.data.playerId && candidate.socketId === socket.id
+    );
+    if (!player) return null;
+    return { room, player };
+  }
+
+  function cleanNickname(value) {
+    if (typeof value !== 'string') return null;
+    const nickname = value.trim().replace(/\s+/g, ' ');
+    if (!nickname || nickname.length > config.maxNicknameLength) return null;
+    if (/[\u0000-\u001f\u007f]/.test(nickname)) return null;
+    return nickname;
+  }
+
+  function cleanRoomCode(value) {
+    if (typeof value !== 'string') return null;
+    const code = value.trim();
+    return /^\d{6}$/.test(code) ? code : null;
+  }
+
+  function cleanLevel(value) {
+    return value === 'CET4' || value === 'CET6' ? value : null;
+  }
+
+  function cleanMode(value) {
+    return value === 'quiz' || value === 'race' ? value : null;
+  }
+
+  function newCode() {
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      const code = String(crypto.randomInt(100000, 1000000));
+      if (!rooms.has(code)) return code;
+    }
+    throw new Error('暂时无法分配房间码，请稍后重试');
+  }
+
+  function newPlayer(nickname) {
+    return {
+      id: crypto.randomUUID(),
+      sessionId: crypto.randomBytes(24).toString('hex'),
+      nickname,
+      socketId: null,
+      connected: false,
+      ready: false,
+      score: 0,
+    };
+  }
+
+  function bindPlayer(socket, room, player) {
+    player.socketId = socket.id;
+    player.connected = true;
+    socket.join(room.code);
+    socket.data.roomCode = room.code;
+    socket.data.playerId = player.id;
+    sessions.set(player.sessionId, { roomCode: room.code, playerId: player.id });
+    socketPlayers.set(socket.id, { roomCode: room.code, playerId: player.id });
+    room.lastActivityAt = Date.now();
+  }
+
+  function clearGameTimers(room) {
+    if (room.startTimer) {
+      clearTimeout(room.startTimer);
+      room.startTimer = null;
+    }
+    if (!room.game) return;
+    if (room.game.timer) clearTimeout(room.game.timer);
+    if (room.game.nextTimer) clearTimeout(room.game.nextTimer);
+    room.game.timer = null;
+    room.game.nextTimer = null;
+
+    if (room.game.states) {
+      for (const state of Object.values(room.game.states)) {
+        if (state.unlockTimer) clearTimeout(state.unlockTimer);
+        if (state.nextQuestionTimer) clearTimeout(state.nextQuestionTimer);
+        state.unlockTimer = null;
+        state.nextQuestionTimer = null;
+      }
+    }
+  }
+
+  function deleteRoom(room) {
+    clearGameTimers(room);
+    for (const player of room.players) {
+      sessions.delete(player.sessionId);
+    }
+    io.to(room.code).emit('room:closed', { reason: '房间已关闭' });
+    rooms.delete(room.code);
+  }
+
+  function startQuestion(room, questionIndex) {
+    if (room.status !== 'playing' || !room.game || room.game.mode !== 'quiz') return;
+    if (questionIndex >= room.game.questions.length) {
+      finishQuizGame(room);
+      return;
+    }
+
+    room.game.nextTimer = null;
+    room.game.index = questionIndex;
+    const question = room.game.questions[questionIndex];
+    const startedAt = Date.now();
+    room.game.question = {
+      type: question.type,
+      prompt: question.prompt,
+      promptLabel: question.promptLabel,
+      word: question.word,
+      level: question.level,
+      meanings: question.meanings,
+      primary: question.primary,
+      correctText: question.correctText,
+      options: question.options,
+      correctIndex: question.correctIndex,
+      meaning: question.meaning,
+      deadline: startedAt + config.questionMs,
+      answers: {},
+      ended: false,
+    };
+    room.lastActivityAt = startedAt;
+
+    io.to(room.code).emit('question:start', {
+      mode: 'quiz',
+      index: questionIndex + 1,
+      total: room.game.questions.length,
+      type: question.type,
+      prompt: question.prompt,
+      promptLabel: question.promptLabel,
+      word: question.word,
+      level: question.level,
+      options: question.options,
+      deadline: room.game.question.deadline,
+      serverNow: startedAt,
+      players: publicPlayers(room),
+    });
+
+    room.game.timer = setTimeout(() => {
+      if (rooms.get(room.code) !== room) return;
+      endQuestion(room, 'timeout');
+    }, config.questionMs + 25);
+  }
+
+  function answerList(room, question) {
+    return room.players.map((player) => {
+      const answer = question.answers[player.id];
+      return {
+        playerId: player.id,
+        nickname: player.nickname,
+        selectedIndex: answer ? answer.selectedIndex : null,
+        correct: Boolean(answer && answer.correct),
+      };
+    });
+  }
+
+  function scoreList(room) {
+    return room.players.map((player) => ({
+      id: player.id,
+      nickname: player.nickname,
+      score: player.score,
+    }));
+  }
+
+  function reviewEntry(question, index, statuses, mistakes = {}) {
+    return {
+      index: index + 1,
+      word: question.word,
+      level: question.level,
+      meanings: question.meanings,
+      primary: question.primary,
+      correctOption: question.correctText,
+      statuses,
+      mistakes,
+    };
+  }
+
+  function buildQuizReview(room) {
+    return (room.game?.history || []).map((result) => {
+      const statuses = {};
+      for (const player of room.players) {
+        const answer = result.answers.find((entry) => entry.playerId === player.id);
+        statuses[player.id] =
+          !answer || answer.selectedIndex === null
+            ? 'unanswered'
+            : answer.correct
+              ? 'correct'
+              : 'wrong';
+      }
+      return reviewEntry(
+        {
+          word: result.word,
+          level: result.level,
+          meanings: result.meanings,
+          primary: result.primary,
+          correctText: result.correctOption,
+        },
+        result.questionIndex - 1,
+        statuses
+      );
+    });
+  }
+
+  function buildRaceReview(room) {
+    const game = room.game;
+    return game.questions.map((question, index) => {
+      const statuses = {};
+      const mistakes = {};
+      for (const player of room.players) {
+        const state = game.states[player.id];
+        const answer = state && state.answers[index];
+        statuses[player.id] = answer ? answer.status : 'unanswered';
+        mistakes[player.id] = Boolean(answer && answer.hasMistake);
+      }
+      return reviewEntry(question, index, statuses, mistakes);
+    });
+  }
+
+  function endQuestion(room, reason, winnerId = null) {
+    const game = room.game;
+    const question = game && game.question;
+    if (!question || question.ended) return;
+
+    question.ended = true;
+    if (game.timer) clearTimeout(game.timer);
+    game.timer = null;
+
+    const winner = winnerId
+      ? room.players.find((player) => player.id === winnerId)
+      : null;
+
+    const result = {
+      questionIndex: game.index + 1,
+      total: game.questions.length,
+      type: question.type,
+      prompt: question.prompt,
+      promptLabel: question.promptLabel,
+      word: question.word,
+      level: question.level,
+      meanings: question.meanings,
+      primary: question.primary,
+      correctIndex: question.correctIndex,
+      correctOption: question.correctText,
+      correctMeaning: question.correctText,
+      reason,
+      winnerId: winner ? winner.id : null,
+      winnerName: winner ? winner.nickname : null,
+      answers: answerList(room, question),
+      players: scoreList(room),
+    };
+
+    game.lastResult = result;
+    game.history.push(result);
+    game.question = null;
+
+    io.to(room.code).emit('question:end', result);
+
+    const isLast = game.index + 1 >= game.questions.length;
+    game.nextTimer = setTimeout(() => {
+      if (rooms.get(room.code) !== room || room.status !== 'playing') return;
+      if (isLast) {
+        finishQuizGame(room);
+      } else {
+        startQuestion(room, game.index + 1);
+      }
+    }, config.revealMs);
+  }
+
+  function finishQuizGame(room) {
+    if (room.status !== 'playing' || !room.game || room.game.mode !== 'quiz') return;
+    clearGameTimers(room);
+
+    const scores = scoreList(room);
+    const highest = Math.max(...scores.map((entry) => entry.score));
+    const leaders = room.players.filter((player) => player.score === highest);
+    const tie = leaders.length !== 1;
+    const winner = tie ? null : leaders[0];
+
+    room.status = 'finished';
+    room.players.forEach((player) => {
+      player.ready = false;
+    });
+    room.lastActivityAt = Date.now();
+
+    const final = {
+      mode: 'quiz',
+      level: room.level,
+      tie,
+      winnerId: winner ? winner.id : null,
+      winnerName: winner ? winner.nickname : null,
+      scores,
+      players: publicPlayers(room),
+      review: buildQuizReview(room),
+    };
+    room.game.final = final;
+    room.game.question = null;
+
+    io.to(room.code).emit('game:over', final);
+    broadcastRoom(room);
+  }
+
+  function raceProgress(room) {
+    if (!room.game || !room.game.states) return [];
+    return room.players.map((player) => {
+      const state = room.game.states[player.id];
+      return {
+        id: player.id,
+        nickname: player.nickname,
+        progress: state ? Math.min(state.index, room.game.questions.length) : 0,
+        errors: state ? state.errors : 0,
+        finished: Boolean(state && state.finishedAt),
+      };
+    });
+  }
+
+  function raceQuestionPayload(room, state) {
+    if (!state || state.index >= room.game.questions.length) return null;
+    const question = room.game.questions[state.index];
+    return {
+      mode: 'race',
+      index: state.index + 1,
+      total: room.game.questions.length,
+      type: question.type,
+      prompt: question.prompt,
+      promptLabel: question.promptLabel,
+      word: question.word,
+      level: question.level,
+      options: question.options,
+      startedAt: room.game.startedAt,
+    };
+  }
+
+  function sendRaceSync(room, player) {
+    if (!room.game || room.game.mode !== 'race') return;
+    const state = room.game.states[player.id];
+    if (!state) return;
+    const socket = player.socketId ? io.sockets.sockets.get(player.socketId) : null;
+    if (!socket) return;
+
+    socket.emit('race:sync', {
+      mode: 'race',
+      total: room.game.questions.length,
+      startedAt: room.game.startedAt,
+      serverNow: Date.now(),
+      progress: raceProgress(room),
+      question: state.finishedAt ? null : raceQuestionPayload(room, state),
+      you: {
+        playerId: player.id,
+        progress: Math.min(state.index, room.game.questions.length),
+        errors: state.errors,
+        lockedUntil: state.lockedUntil,
+        finishedAt: state.finishedAt,
+      },
+    });
+  }
+
+  function sendRaceQuestion(room, player) {
+    if (!room.game || room.game.mode !== 'race') return;
+    const state = room.game.states[player.id];
+    if (!state || state.finishedAt) return;
+    const question = raceQuestionPayload(room, state);
+    if (!question) return;
+    const socket = player.socketId ? io.sockets.sockets.get(player.socketId) : null;
+    if (!socket) return;
+    socket.emit('race:question', {
+      ...question,
+      progress: Math.min(state.index, room.game.questions.length),
+      errors: state.errors,
+      serverNow: Date.now(),
+    });
+  }
+
+  function emitRaceProgress(room) {
+    if (!room.game || room.game.mode !== 'race') return;
+    io.to(room.code).emit('race:progress', {
+      mode: 'race',
+      total: room.game.questions.length,
+      startedAt: room.game.startedAt,
+      serverNow: Date.now(),
+      progress: raceProgress(room),
+    });
+  }
+
+  function startRace(room) {
+    if (room.status !== 'playing' || !room.game || room.game.mode !== 'race') return;
+    const now = Date.now();
+    room.game.startedAt = now;
+    room.game.states = {};
+    for (const player of room.players) {
+      room.game.states[player.id] = {
+        index: 0,
+        errors: 0,
+        answers: {},
+        finishedAt: null,
+        lockedUntil: 0,
+        unlockTimer: null,
+        nextQuestionTimer: null,
+      };
+    }
+    room.lastActivityAt = now;
+    emitRaceProgress(room);
+    for (const player of room.players) {
+      sendRaceSync(room, player);
+    }
+  }
+
+  /**
+   * 单个玩家完成 25 题后只标记其个人完成状态，不结束整局。
+   * 未完成的玩家继续答题；只有双方都完成后才调用 finishRace 统一结算。
+   */
+  function finishRacePlayer(room, player) {
+    if (room.status !== 'playing' || !room.game || room.game.mode !== 'race') return;
+    const state = room.game.states[player.id];
+    if (!state || state.finishedAt) return;
+
+    state.finishedAt = Date.now();
+    state.index = room.game.questions.length;
+    state.lockedUntil = 0;
+    if (state.unlockTimer) clearTimeout(state.unlockTimer);
+    if (state.nextQuestionTimer) clearTimeout(state.nextQuestionTimer);
+    state.unlockTimer = null;
+    state.nextQuestionTimer = null;
+    room.lastActivityAt = state.finishedAt;
+
+    emitRaceProgress(room);
+
+    const allFinished = room.players.every((candidate) => {
+      const candidateState = room.game.states[candidate.id];
+      return Boolean(candidateState && candidateState.finishedAt);
+    });
+    if (allFinished) {
+      finishRace(room, player);
+      return;
+    }
+
+    // 让先完成的玩家立即进入等待页；重连时 sendRaceSync 也会恢复该状态。
+    sendRaceSync(room, player);
+  }
+
+  function finishRace(room, triggerPlayer) {
+    if (room.status !== 'playing' || !room.game || room.game.mode !== 'race') return;
+    clearGameTimers(room);
+
+    const now = Date.now();
+    const total = room.game.questions.length;
+    const stats = room.players.map((player) => {
+      const state = room.game.states[player.id];
+      const finishedAt = state.finishedAt || null;
+      return {
+        id: player.id,
+        nickname: player.nickname,
+        progress: state ? Math.min(state.index, total) : 0,
+        errors: state ? state.errors : 0,
+        finished: Boolean(finishedAt),
+        totalMs: Math.max(0, (finishedAt || now) - room.game.startedAt),
+      };
+    });
+
+    const allFinished = stats.every((entry) => entry.finished);
+    let winnerStats;
+    if (allFinished) {
+      // 双方都完成时：总用时优先，错误数作为次级判定。
+      winnerStats = [...stats].sort(
+        (a, b) => a.totalMs - b.totalMs || a.errors - b.errors
+      )[0];
+    } else {
+      winnerStats =
+        stats.find((entry) => entry.finished) ||
+        stats.find((entry) => entry.id === triggerPlayer.id) ||
+        stats[0];
+    }
+    const winner = room.players.find((player) => player.id === winnerStats.id);
+
+    room.status = 'finished';
+    room.players.forEach((player) => {
+      player.ready = false;
+    });
+    room.lastActivityAt = now;
+
+    const final = {
+      mode: 'race',
+      level: room.level,
+      total,
+      tie: false,
+      winnerId: winner ? winner.id : null,
+      winnerName: winner ? winner.nickname : null,
+      durationMs: Math.max(0, now - room.game.startedAt),
+      scores: stats.map((entry) => ({
+        id: entry.id,
+        nickname: entry.nickname,
+        score: entry.progress,
+      })),
+      players: publicPlayers(room),
+      stats,
+      review: buildRaceReview(room),
+    };
+    room.game.final = final;
+    room.game.finishedAt = now;
+
+    io.to(room.code).emit('game:over', final);
+    broadcastRoom(room);
+  }
+
+  function scheduleStart(room) {
+    room.startTimer = setTimeout(() => {
+      room.startTimer = null;
+      if (rooms.get(room.code) !== room || room.status !== 'playing') return;
+      startQuestion(room, 0);
+    }, config.startDelayMs);
+  }
+
+  function registerSocket(socket) {
+    const on = (event, handler) => {
+      socket.on(event, (payload, ack) => {
+        const reply = typeof ack === 'function' ? ack : () => {};
+        try {
+          handler(payload && typeof payload === 'object' ? payload : {}, reply);
+        } catch (error) {
+          console.error(`[socket:${event}]`, error);
+          reply({ ok: false, error: '服务器处理请求时出错，请重试' });
+        }
+      });
+    };
+
+    socket.on('latency:ping', (payload, ack) => {
+      if (typeof ack !== 'function') return;
+      ack({
+        ok: true,
+        t: payload && payload.t != null ? payload.t : null,
+        serverNow: Date.now(),
+      });
+    });
+
+    on('room:create', (payload, ack) => {
+      if (socket.data.roomCode) {
+        ack({ ok: false, error: '你已经在一个房间中' });
+        return;
+      }
+      const nickname = cleanNickname(payload.nickname);
+      if (!nickname) {
+        ack({ ok: false, error: `昵称需为 1-${config.maxNicknameLength} 个字符` });
+        return;
+      }
+      const level = payload.level === undefined ? 'CET4' : cleanLevel(payload.level);
+      if (!level || level === 'CET6') {
+        ack({ ok: false, error: '六级词库正在建设中，请先体验四级' });
+        return;
+      }
+
+      const code = newCode();
+      const room = {
+        code,
+        level: 'CET4',
+        mode: 'quiz',
+        hostId: null,
+        status: 'waiting',
+        createdAt: Date.now(),
+        lastActivityAt: Date.now(),
+        players: [],
+        game: null,
+        startTimer: null,
+      };
+      const player = newPlayer(nickname);
+      room.hostId = player.id;
+      room.players.push(player);
+      rooms.set(code, room);
+      bindPlayer(socket, room, player);
+
+      ack({ ok: true, playerId: player.id, sessionId: player.sessionId, room: roomView(room) });
+      broadcastRoom(room);
+    });
+
+    on('room:join', (payload, ack) => {
+      if (socket.data.roomCode) {
+        ack({ ok: false, error: '你已经在一个房间中' });
+        return;
+      }
+      const nickname = cleanNickname(payload.nickname);
+      const code = cleanRoomCode(payload.code);
+      if (!nickname) {
+        ack({ ok: false, error: `昵称需为 1-${config.maxNicknameLength} 个字符` });
+        return;
+      }
+      if (!code) {
+        ack({ ok: false, error: '请输入 6 位数字房间码' });
+        return;
+      }
+      const room = rooms.get(code);
+      if (!room) {
+        ack({ ok: false, error: '房间不存在，请检查房间码' });
+        return;
+      }
+      if (room.players.length >= 2) {
+        ack({ ok: false, error: '房间已满（最多 2 人）' });
+        return;
+      }
+      if (room.status !== 'waiting') {
+        ack({ ok: false, error: '该房间已经开局，无法加入' });
+        return;
+      }
+
+      const player = newPlayer(nickname);
+      room.players.push(player);
+      bindPlayer(socket, room, player);
+
+      ack({ ok: true, playerId: player.id, sessionId: player.sessionId, room: roomView(room) });
+      broadcastRoom(room);
+    });
+
+    on('room:resume', (payload, ack) => {
+      const sessionId = typeof payload.sessionId === 'string' ? payload.sessionId : '';
+      if (!sessionId) {
+        ack({ ok: false, fatal: true, error: '没有可恢复的会话' });
+        return;
+      }
+      if (socket.data.roomCode) {
+        ack({ ok: false, fatal: true, error: '当前连接已经在房间中' });
+        return;
+      }
+      const reference = sessions.get(sessionId);
+      const room = reference ? rooms.get(reference.roomCode) : null;
+      const player = room
+        ? room.players.find((candidate) => candidate.id === reference.playerId)
+        : null;
+
+      if (!room || !player) {
+        sessions.delete(sessionId);
+        ack({ ok: false, fatal: true, error: '原房间已关闭或会话已失效' });
+        return;
+      }
+
+      if (player.socketId && player.socketId !== socket.id) {
+        const previous = io.sockets.sockets.get(player.socketId);
+        socketPlayers.delete(player.socketId);
+        if (previous) {
+          previous.leave(room.code);
+          previous.data.roomCode = null;
+          previous.data.playerId = null;
+          previous.disconnect(true);
+        }
+      }
+
+      bindPlayer(socket, room, player);
+      ack({
+        ok: true,
+        playerId: player.id,
+        sessionId: player.sessionId,
+        room: roomView(room),
+      });
+      broadcastRoom(room);
+      if (room.status === 'playing' && room.game && room.game.mode === 'race') {
+        sendRaceSync(room, player);
+      }
+    });
+
+    on('player:ready', (payload, ack) => {
+      const context = findContext(socket);
+      if (!context) {
+        ack({ ok: false, error: '你不在房间中' });
+        return;
+      }
+      const { room, player } = context;
+      if (room.status !== 'waiting') {
+        ack({ ok: false, error: '当前不能修改准备状态' });
+        return;
+      }
+      player.ready = Boolean(payload.ready);
+      room.lastActivityAt = Date.now();
+      ack({ ok: true, room: roomView(room) });
+      broadcastRoom(room);
+    });
+
+    on('room:mode', (payload, ack) => {
+      const context = findContext(socket);
+      if (!context) {
+        ack({ ok: false, error: '你不在房间中' });
+        return;
+      }
+      const { room, player } = context;
+      if (room.hostId !== player.id) {
+        ack({ ok: false, error: '只有房主可以切换模式' });
+        return;
+      }
+      if (room.status !== 'waiting') {
+        ack({ ok: false, error: '对局开始后不能切换模式' });
+        return;
+      }
+      const mode = cleanMode(payload.mode);
+      if (!mode) {
+        ack({ ok: false, error: '无效的对战模式' });
+        return;
+      }
+      room.mode = mode;
+      room.lastActivityAt = Date.now();
+      ack({ ok: true, room: roomView(room) });
+      broadcastRoom(room);
+    });
+
+    on('room:level', (payload, ack) => {
+      const context = findContext(socket);
+      if (!context) {
+        ack({ ok: false, error: '你不在房间中' });
+        return;
+      }
+      const { room, player } = context;
+      if (room.hostId !== player.id) {
+        ack({ ok: false, error: '只有房主可以选择词库范围' });
+        return;
+      }
+      if (room.status !== 'waiting') {
+        ack({ ok: false, error: '对局开始后不能切换词库范围' });
+        return;
+      }
+      const level = cleanLevel(payload.level);
+      if (!level) {
+        ack({ ok: false, error: '无效的词库范围' });
+        return;
+      }
+      if (level === 'CET6') {
+        ack({ ok: false, error: '六级词库正在建设中，请先体验四级' });
+        return;
+      }
+      room.level = level;
+      room.lastActivityAt = Date.now();
+      ack({ ok: true, room: roomView(room) });
+      broadcastRoom(room);
+    });
+
+    on('game:start', (payload, ack) => {
+      const context = findContext(socket);
+      if (!context) {
+        ack({ ok: false, error: '你不在房间中' });
+        return;
+      }
+      const { room, player } = context;
+      if (room.hostId !== player.id) {
+        ack({ ok: false, error: '只有房主可以开始对战' });
+        return;
+      }
+      if (room.status !== 'waiting') {
+        ack({ ok: false, error: '当前状态不能开始对战' });
+        return;
+      }
+      if (room.players.length !== 2) {
+        ack({ ok: false, error: '需要两位玩家才能开始' });
+        return;
+      }
+      if (room.players.some((candidate) => !candidate.connected)) {
+        ack({ ok: false, error: '对手已掉线，请等待其重连' });
+        return;
+      }
+      if (room.players.some((candidate) => !candidate.ready)) {
+        ack({ ok: false, error: '双方都准备好后才能开始' });
+        return;
+      }
+
+      const mode = room.mode || 'quiz';
+      const questionCount = mode === 'race' ? 25 : 10;
+      let questions;
+      try {
+        questions = buildQuestions(words, questionCount, room.level);
+      } catch (error) {
+        console.error('[start]', error);
+        ack({
+          ok: false,
+          error:
+            `${room.level === 'CET4' ? '四级' : '六级'}词库不足或损坏，` +
+            `当前模式需要 ${questionCount} 个词条`,
+        });
+        return;
+      }
+
+      room.players.forEach((candidate) => {
+        candidate.score = 0;
+        candidate.ready = false;
+      });
+      room.status = 'playing';
+      if (mode === 'race') {
+        room.game = {
+          mode: 'race',
+          questions,
+          startedAt: null,
+          finishedAt: null,
+          states: null,
+          final: null,
+        };
+      } else {
+        room.game = {
+          mode: 'quiz',
+          questions,
+          index: -1,
+          question: null,
+          lastResult: null,
+          history: [],
+          final: null,
+          timer: null,
+          nextTimer: null,
+        };
+      }
+      room.lastActivityAt = Date.now();
+
+      ack({ ok: true, room: roomView(room) });
+      broadcastRoom(room);
+      if (mode === 'race') {
+        startRace(room);
+      } else {
+        scheduleStart(room);
+      }
+    });
+
+    on('game:answer', (payload, ack) => {
+      const context = findContext(socket);
+      if (!context) {
+        ack({ ok: false, error: '你不在房间中' });
+        return;
+      }
+      const { room, player } = context;
+      if (room.status !== 'playing' || !room.game || !room.game.question) {
+        ack({ ok: false, error: '当前没有可作答的题目' });
+        return;
+      }
+      const question = room.game.question;
+      if (question.ended) {
+        ack({ ok: false, error: '本题已经结束' });
+        return;
+      }
+      if (Date.now() >= question.deadline) {
+        endQuestion(room, 'timeout');
+        ack({ ok: false, error: '本题已超时' });
+        return;
+      }
+      if (question.answers[player.id]) {
+        ack({ ok: false, error: '本题你已经作答过了' });
+        return;
+      }
+      const optionIndex = payload.optionIndex;
+      if (!Number.isInteger(optionIndex) || optionIndex < 0 || optionIndex >= question.options.length) {
+        ack({ ok: false, error: '无效的选项' });
+        return;
+      }
+
+      const correct = optionIndex === question.correctIndex;
+      question.answers[player.id] = {
+        selectedIndex: optionIndex,
+        correct,
+        answeredAt: Date.now(),
+      };
+      room.lastActivityAt = Date.now();
+
+      if (correct) {
+        player.score += 10;
+        ack({
+          ok: true,
+          correct: true,
+          selectedIndex: optionIndex,
+          score: player.score,
+          locked: true,
+        });
+        endQuestion(room, 'correct', player.id);
+        return;
+      }
+
+      player.score -= 5;
+      ack({
+        ok: true,
+        correct: false,
+        selectedIndex: optionIndex,
+        score: player.score,
+        locked: true,
+      });
+      socket.to(room.code).emit('answer:update', {
+        playerId: player.id,
+        nickname: player.nickname,
+        correct: false,
+        score: player.score,
+        selectedIndex: optionIndex,
+      });
+
+      const everyoneAnswered = room.players.every(
+        (candidate) => question.answers[candidate.id]
+      );
+      if (everyoneAnswered) {
+        endQuestion(room, 'all_wrong');
+      }
+    });
+
+    on('race:answer', (payload, ack) => {
+      const context = findContext(socket);
+      if (!context) {
+        ack({ ok: false, error: '你不在房间中' });
+        return;
+      }
+      const { room, player } = context;
+      if (
+        room.status !== 'playing' ||
+        room.mode !== 'race' ||
+        !room.game ||
+        room.game.mode !== 'race'
+      ) {
+        ack({ ok: false, error: '当前不在竞速对局中' });
+        return;
+      }
+      const game = room.game;
+      const state = game.states[player.id];
+      if (!state) {
+        ack({ ok: false, error: '找不到你的竞速状态' });
+        return;
+      }
+      if (state.finishedAt) {
+        ack({ ok: false, error: '你已经完成全部题目' });
+        return;
+      }
+
+      const now = Date.now();
+      if (state.lockedUntil > now) {
+        ack({
+          ok: false,
+          code: 'LOCKED',
+          error: '答错惩罚中，请等待倒计时结束',
+          lockedUntil: state.lockedUntil,
+          serverNow: now,
+          remainingMs: state.lockedUntil - now,
+        });
+        return;
+      }
+
+      const question = game.questions[state.index];
+      if (!question) {
+        ack({ ok: false, error: '当前没有可作答的题目' });
+        return;
+      }
+      const optionIndex = payload.optionIndex;
+      if (
+        !Number.isInteger(optionIndex) ||
+        optionIndex < 0 ||
+        optionIndex >= question.options.length
+      ) {
+        ack({ ok: false, error: '无效的选项' });
+        return;
+      }
+
+      const previous = state.answers[state.index];
+      const attempts = (previous ? previous.attempts : 0) + 1;
+      const correct = optionIndex === question.correctIndex;
+      // 只要本题选错过一次，后续即使纠正也保留“曾答错”标记，供复盘使用。
+      const hasMistake = Boolean(previous && previous.hasMistake) || !correct;
+      room.lastActivityAt = now;
+
+      if (correct) {
+        state.answers[state.index] = {
+          status: 'correct',
+          correct: true,
+          selectedIndex: optionIndex,
+          attempts,
+          hasMistake,
+          answeredAt: now,
+        };
+        state.index += 1;
+        state.lockedUntil = 0;
+        if (state.unlockTimer) clearTimeout(state.unlockTimer);
+        if (state.nextQuestionTimer) clearTimeout(state.nextQuestionTimer);
+        state.unlockTimer = null;
+        state.nextQuestionTimer = null;
+
+        const finished = state.index >= game.questions.length;
+        ack({
+          ok: true,
+          correct: true,
+          selectedIndex: optionIndex,
+          progress: state.index,
+          total: game.questions.length,
+          errors: state.errors,
+          finished,
+        });
+        emitRaceProgress(room);
+
+        if (finished) {
+          finishRacePlayer(room, player);
+          return;
+        }
+
+        state.nextQuestionTimer = setTimeout(() => {
+          state.nextQuestionTimer = null;
+          if (rooms.get(room.code) !== room || room.status !== 'playing') return;
+          if (!game.states[player.id] || game.states[player.id].finishedAt) return;
+          sendRaceQuestion(room, player);
+        }, config.raceAdvanceDelayMs);
+        return;
+      }
+
+      state.answers[state.index] = {
+        status: 'wrong',
+        correct: false,
+        selectedIndex: optionIndex,
+        attempts,
+        hasMistake,
+        answeredAt: now,
+      };
+      state.errors += 1;
+      state.lockedUntil = now + config.racePenaltyMs;
+      if (state.unlockTimer) clearTimeout(state.unlockTimer);
+
+      ack({
+        ok: true,
+        correct: false,
+        selectedIndex: optionIndex,
+        progress: state.index,
+        total: game.questions.length,
+        errors: state.errors,
+        lockedUntil: state.lockedUntil,
+        penaltyMs: config.racePenaltyMs,
+        serverNow: now,
+      });
+      socket.emit('race:locked', {
+        selectedIndex: optionIndex,
+        lockedUntil: state.lockedUntil,
+        serverNow: now,
+        penaltyMs: config.racePenaltyMs,
+        errors: state.errors,
+      });
+      emitRaceProgress(room);
+
+      state.unlockTimer = setTimeout(() => {
+        state.unlockTimer = null;
+        if (rooms.get(room.code) !== room || room.status !== 'playing') return;
+        if (state.finishedAt) return;
+        if (state.lockedUntil > Date.now()) return;
+        state.lockedUntil = 0;
+        const currentPlayer = room.players.find((entry) => entry.id === player.id);
+        if (!currentPlayer) return;
+        const currentSocket = currentPlayer.socketId
+          ? io.sockets.sockets.get(currentPlayer.socketId)
+          : null;
+        if (currentSocket) {
+          currentSocket.emit('race:unlocked', {
+            index: state.index + 1,
+            errors: state.errors,
+            serverNow: Date.now(),
+          });
+        }
+      }, config.racePenaltyMs + 25);
+    });
+
+    on('game:rematch', (payload, ack) => {
+      const context = findContext(socket);
+      if (!context) {
+        ack({ ok: false, error: '你不在房间中' });
+        return;
+      }
+      const { room } = context;
+      if (room.status !== 'finished') {
+        ack({ ok: false, error: '当前不能再来一局' });
+        return;
+      }
+      clearGameTimers(room);
+      room.status = 'waiting';
+      room.game = null;
+      room.players.forEach((player) => {
+        player.score = 0;
+        player.ready = false;
+      });
+      room.lastActivityAt = Date.now();
+      ack({ ok: true, room: roomView(room) });
+      broadcastRoom(room);
+    });
+
+    on('room:leave', (payload, ack) => {
+      const context = findContext(socket);
+      if (!context) {
+        ack({ ok: false, error: '你不在房间中' });
+        return;
+      }
+      const { room, player } = context;
+      if (room.status === 'playing') {
+        ack({ ok: false, error: '对局进行中，暂不能退出房间' });
+        return;
+      }
+
+      sessions.delete(player.sessionId);
+      socketPlayers.delete(socket.id);
+      room.players = room.players.filter((candidate) => candidate.id !== player.id);
+      socket.leave(room.code);
+      socket.data.roomCode = null;
+      socket.data.playerId = null;
+
+      if (room.players.length === 0) {
+        deleteRoom(room);
+      } else {
+        if (room.hostId === player.id) {
+          room.hostId = room.players[0].id;
+        }
+        if (room.status === 'finished') {
+          room.status = 'waiting';
+          room.game = null;
+          room.players.forEach((candidate) => {
+            candidate.ready = false;
+            candidate.score = 0;
+          });
+        }
+        room.lastActivityAt = Date.now();
+        broadcastRoom(room);
+      }
+      ack({ ok: true });
+    });
+
+    socket.on('disconnect', () => {
+      const reference = socketPlayers.get(socket.id);
+      if (!reference) return;
+      socketPlayers.delete(socket.id);
+      const room = rooms.get(reference.roomCode);
+      if (!room) return;
+      const player = room.players.find((candidate) => candidate.id === reference.playerId);
+      if (!player || player.socketId !== socket.id) return;
+
+      player.connected = false;
+      player.socketId = null;
+      room.lastActivityAt = Date.now();
+      broadcastRoom(room);
+    });
+  }
+
+  io.on('connection', (socket) => {
+    registerSocket(socket);
+  });
+
+  const cleanupTimer = setInterval(() => {
+    const now = Date.now();
+    for (const room of [...rooms.values()]) {
+      const hasConnectedPlayer = room.players.some((player) => player.connected);
+      if (!hasConnectedPlayer && now - room.lastActivityAt > config.roomTtlMs) {
+        deleteRoom(room);
+      }
+    }
+  }, config.cleanupIntervalMs);
+  cleanupTimer.unref();
+
+  function close() {
+    clearInterval(cleanupTimer);
+    for (const room of [...rooms.values()]) {
+      clearGameTimers(room);
+    }
+    rooms.clear();
+    sessions.clear();
+    socketPlayers.clear();
+    return new Promise((resolve) => {
+      io.close(() => httpServer.close(() => resolve()));
+    });
+  }
+
+  return { app, httpServer, io, rooms, sessions, config, close };
+}
+
+module.exports = { createArenaServer, DEFAULT_CONFIG, SESSION_MISSING };
