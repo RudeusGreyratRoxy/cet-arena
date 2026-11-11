@@ -321,6 +321,31 @@ Cloudflare Quick Tunnel 适合开发和临时验收，不适合长期线上服�
 - 端口读取 `PORT` 环境变量；
 - 若需要长期稳定使用，建议后续再引入 Redis 等共享状态和正式身份验证，但这超出本 MVP 范围。
 
+### 4.6 腾讯云服务器部署与更新（当前线上环境）
+
+线上环境：腾讯云 Ubuntu 22.04（2 核 2G），项目目录 `/opt/cet-arena`，PM2 进程名 `cet-arena`，访问地址 `http://1.15.152.160:3000`。
+
+**日常更新（推荐流程）**
+
+```bash
+cd /opt/cet-arena && git pull && pm2 restart cet-arena
+```
+
+**为什么需要 Deploy Key**
+
+这台机器直连 `github.com` 的 HTTPS 会被阻断（连接超时），因此仓库改用 **Deploy Key + `ssh.github.com:443`** 拉取：
+
+- 仓库级只读 Deploy Key：`~/.ssh/cet_arena_deploy`（ed25519，仅该仓库可读）；
+- `~/.ssh/config` 把 `github.com` 重定向到 `ssh.github.com:443`，这样 `git pull` 与普通用法完全一致；
+- 首次部署还要 `git init -b main && git remote add origin git@github.com:RudeusGreyratRoxy/cet-arena.git`，之后只用 `git pull`。
+
+**运维要点**
+
+- 进程守护：`pm2 save` + `pm2 startup systemd -u ubuntu`，服务器重启后自动拉起；
+- 日志轮转：`pm2-logrotate`（10M 上限、保留 5 份）；
+- 健康检查：`curl http://127.0.0.1:3000/healthz`，返回 `{"ok":true,"words":2868,...}`；
+- 词库/代码更新后必须重启 PM2，服务只在启动时读取 `data/words.json`。
+
 ## 5. 替换或导入词库
 
 词库文件：`data/words.json`
