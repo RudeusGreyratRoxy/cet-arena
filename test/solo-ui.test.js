@@ -121,6 +121,14 @@ function createEnv(options = {}) {
   const ackHandlers = new Map();
   const eventHandlers = new Map();
 
+  // 预置激活态：让「创建房间」直接可用（VIP 流程另有专门用例覆盖）
+  if (options.seedVip) {
+    storageMap.set('cetArena.vip.v1', JSON.stringify({ code: options.seedVip }));
+  }
+  for (const [event, handler] of Object.entries(options.acks || {})) {
+    ackHandlers.set(event, handler);
+  }
+
   function createSocket() {
     const socket = {
       connected: true,
@@ -510,7 +518,12 @@ async function scenarioSoloListen() {
 
 async function scenarioMultiplayerListen() {
   console.log('=== 场景 6：双人听音题（自动发音 + 答后中文释义） ===');
-  const env = createEnv({ speech: true });
+  const env = createEnv({
+    speech: true,
+    seedVip: '080323',
+    acks: { 'vip:verify': () => ({ ok: true, kind: 'unlimited' }) },
+  });
+  await flush();
   env.el('nickname').value = 'Tester';
   env.ackHandlers.set('room:create', () => ({
     ok: true,
@@ -622,9 +635,90 @@ async function scenarioSoloWrongColoring() {
   console.log('  ✓ 答错时错选标红、正确项标绿');
 }
 
+async function scenarioVipPaywall() {
+  console.log('=== 场景 8：VIP 遮罩与激活流程 ===');
+  const env = createEnv({
+    acks: {
+      'vip:verify': () => ({ ok: true, kind: 'once', message: '验证成功' }),
+      'room:create': () => ({
+        ok: true,
+        playerId: 'p1',
+        sessionId: 's1',
+        room: {
+          code: '123456',
+          hostId: 'p1',
+          level: 'CET4',
+          mode: 'quiz',
+          status: 'waiting',
+          maxPlayers: 2,
+          players: [{ id: 'p1', nickname: 'Tester', ready: false, score: 0, connected: true, isHost: true }],
+          game: null,
+        },
+      }),
+    },
+  });
+  await flush();
+
+  env.el('nickname').value = 'Tester';
+  env.el('createBtn')._fire('click');
+  await flush();
+
+  assert.equal(env.el('vipOverlay').hidden, false, '未激活时应弹出 VIP 遮罩');
+  assert.equal(env.el('vipStepCode').hidden, false, '默认显示激活码输入');
+  assert.equal(env.el('vipStepPay').hidden, true, '默认不显示支付页');
+  console.log('  ✓ 点「创建房间」弹出全屏 VIP 遮罩');
+
+  env.el('vipToPayBtn')._fire('click');
+  assert.equal(env.el('vipStepPay').hidden, false, '应切到支付页');
+  assert.equal(env.el('vipStepCode').hidden, true);
+  console.log('  ✓ 点「点击支付」进入第二级（年度会员）');
+
+  env.el('vipWechatBtn')._fire('click');
+  assert.equal(
+    env.el('vipNotice').textContent,
+    '支付通道维护中，请联系站长获取专属激活码。'
+  );
+  assert.equal(env.el('vipNotice').hidden, false, '应展示维护提示');
+  console.log('  ✓ 点「微信支付」只提示维护中，无收款码');
+
+  env.el('vipAlipayBtn')._fire('click');
+  assert.equal(env.el('vipNotice').hidden, false, '支付宝同样提示维护');
+  console.log('  ✓ 点「支付宝」同样只提示维护');
+
+  env.el('vipBackBtn')._fire('click');
+  assert.equal(env.el('vipStepCode').hidden, false, '可返回输入激活码');
+
+  env.el('vipCodeInput').value = 'VIP888';
+  env.el('vipVerifyBtn')._fire('click');
+  await flush();
+
+  assert.equal(env.el('vipOverlay').hidden, true, '验证成功后遮罩应关闭');
+  const stored = JSON.parse(env.localStorage.getItem('cetArena.vip.v1'));
+  assert.equal(stored.code, 'VIP888', '应把激活码写入 localStorage');
+  assert.equal(env.document.body.dataset.view, 'room', '验证后应继续建房进入房间');
+  console.log('  ✓ 验证成功后关闭遮罩、写入 localStorage 并继续建房');
+
+  // 清除激活状态：按钮出现 → 点击 → localStorage 清空、按钮隐藏
+  assert.equal(env.el('vipClearBtn').hidden, false, '已激活时首页应显示清除按钮');
+  env.el('vipClearBtn')._fire('click');
+  await flush();
+  assert.equal(
+    env.localStorage.getItem('cetArena.vip.v1'),
+    null,
+    '点击清除后 localStorage 应被移除'
+  );
+  assert.equal(env.el('vipClearBtn').hidden, true, '清除后按钮应隐藏');
+  env.flushTimers();
+  console.log('  ✓ 清除激活状态按钮可用，清除后需重新输入激活码');
+}
+
 async function scenarioResultStoresMistakes() {
   console.log('=== 场景 4：结算页答错的词自动入库 ===');
-  const env = createEnv();
+  const env = createEnv({
+    seedVip: '080323',
+    acks: { 'vip:verify': () => ({ ok: true, kind: 'unlimited' }) },
+  });
+  await flush();
   env.el('nickname').value = 'Tester';
   env.ackHandlers.set('room:create', () => ({
     ok: true,
@@ -718,6 +812,7 @@ async function scenarioResultStoresMistakes() {
   await scenarioSoloListen();
   await scenarioMultiplayerListen();
   await scenarioSoloWrongColoring();
+  await scenarioVipPaywall();
   await scenarioResultStoresMistakes();
   console.log('');
   console.log('错词挑战前端集成测试全部通过。');

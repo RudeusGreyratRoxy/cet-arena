@@ -45,7 +45,7 @@ async function main() {
     originalLog(...args);
   };
 
-  const arena = createArenaServer({ emptyRoomGraceMs: GRACE });
+  const arena = createArenaServer({ emptyRoomGraceMs: GRACE, vipRequired: false });
   await new Promise((resolve) => arena.httpServer.listen(0, '127.0.0.1', resolve));
   const { port } = arena.httpServer.address();
   const url = `http://127.0.0.1:${port}`;

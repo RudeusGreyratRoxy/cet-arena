@@ -7,6 +7,7 @@ const express = require('express');
 const compression = require('compression');
 const { Server } = require('socket.io');
 const { loadWords, buildQuestions, buildQuestion } = require('./wordBank');
+const { createVipStore } = require('./vipCodes');
 const { APP_VERSION } = require('./version');
 
 const DEFAULT_CONFIG = {
@@ -18,6 +19,8 @@ const DEFAULT_CONFIG = {
   roomTtlMs: 30 * 60 * 1000,
   // 双方都离线后，未结束的对局保留多久用于「刷新重连」；结束后立即回收。
   emptyRoomGraceMs: 10 * 1000,
+  // 创建房间需要先通过激活码验证（单人错词挑战不受限制）。
+  vipRequired: true,
   cleanupIntervalMs: 60 * 1000,
   maxNicknameLength: 20,
 };
@@ -32,6 +35,7 @@ function createArenaServer(options = {}) {
   const words = options.words || loadWords();
   const wordById = new Map(words.map((entry) => [entry.id, entry]));
   const wordByName = new Map(words.map((entry) => [entry.word.toLowerCase(), entry]));
+  const vip = options.vip || createVipStore(options.vipOptions);
   const app = express();
   const httpServer = http.createServer(app);
   const io = new Server(httpServer, {
@@ -909,7 +913,30 @@ function createArenaServer(options = {}) {
       ack({ ok: true });
     });
 
+    on('vip:verify', (payload, ack) => {
+      const ip = clientIp(socket);
+      const result = vip.verify(payload.code, ip);
+      audit('vip_verify', {
+        ip,
+        code: String(payload.code == null ? '' : payload.code).slice(0, 24),
+        ok: result.ok,
+        kind: result.kind || null,
+        reason: result.code || null,
+      });
+
+      if (!result.ok) {
+        ack({ ok: false, error: result.message, code: result.code });
+        return;
+      }
+      socket.data.vip = true;
+      ack({ ok: true, kind: result.kind, message: result.message });
+    });
+
     on('room:create', (payload, ack) => {
+      if (config.vipRequired && socket.data.vip !== true) {
+        ack({ ok: false, error: '创建房间需要 VIP 激活码', code: 'VIP_REQUIRED' });
+        return;
+      }
       if (socket.data.roomCode) {
         ack({ ok: false, error: '你已经在一个房间中' });
         return;

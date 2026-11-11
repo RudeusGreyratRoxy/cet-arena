@@ -123,7 +123,9 @@ $env:CI="true"
 - **发音**：只使用浏览器原生 `speechSynthesis`，优先 en-US 音色。**听音选词出题后自动播报一次**；首次触摸/点击页面时会唤醒语音引擎，语音列表异步加载时会在 `voiceschanged` 或 700ms 后补播一次；自动播放被拦截时不弹错误提示，改为让 🔊 按钮跳动引导手动点击（手动点击始终可用）。英译中仍为点击喇叭播放。
 - **答后释义**：听音选词作答后，选项下方展示「中文含义」卡片（如 `breast — n. 乳房；胸脯，胸膛`）——抢答模式在作答 ack 中即时返回，竞速模式在答错后的 1 秒冷却期展示，单人挑战答完即显示，下一题自动清除。
 - **复盘**：始终展示单词拼写、词性、完整释义和你的对错/未作答标记；答错后纠正的题仍显示为答错。竞速复盘还包含双方进度、用时和错误数。
-- **错词自动入库**：结算复盘渲染时，把「答错」或「曾答错后改正」的单词写入浏览器 localStorage（键 `cetArena.wrongBook.v1`），复盘标题会提示「N 个新错词已存入错词本」；重复答错不重复入库，但连对清零、错误次数 +1。
+- **误词自动入库**：结算复盘渲染时，把「答错」或「曾答错后改正」的单词写入浏览器 localStorage（键 `cetArena.wrongBook.v1`），复盘标题会提示「N 个新错词已存入错词本」；重复答错不重复入库，但连对清零、错误次数 +1。
+- **VIP 激活码闸门**：点击「创建房间」会先弹出全屏 VIP 遮罩，输入激活码验证通过后才能建房（单人错词挑战不受限制）。遮罩内「点击支付」进入「年度会员 ￥19.9」页，点微信/支付宝只提示「支付通道维护中，请联系站长获取专属激活码」，**不接真实支付、不出现收款码**。验证成功写入 `localStorage`（键 `cetArena.vip.v1`），刷新后自动静默重验；首页底部有「清除激活状态」小字按钮，点击即清空本地激活态并刷新，便于换人使用。
+- **激活码规则**：`BOSS888`（站长）与 `080323`（专属永久）不限次数、不绑 IP；其余为一次性码，首次验证绑定 IP，换 IP 提示「该卡密已绑定其他设备」，同 IP 可重复验证（供刷新恢复）。服务端在 `room:create` 处强校验，绕过前端也建不了房。
 - **选项着色**：答对时正确选项标绿、其余弱化；答错时错选标红、正确选项标绿。服务端只在**作答后**才下发 `correctIndex`，避免提前泄题。
 - 刷新页面时，浏览器用 localStorage 中的 `sessionId` 自动尝试重连；失败则回首页。
 
@@ -344,6 +346,7 @@ cd /opt/cet-arena && git pull && pm2 restart cet-arena
 - 进程守护：`pm2 save` + `pm2 startup systemd -u ubuntu`，服务器重启后自动拉起；
 - 日志轮转：`pm2-logrotate`（10M 上限、保留 5 份）；
 - 审计日志：`pm2 logs cet-arena --nostream | grep '\[audit\]'` 可查连接/IP/昵称/房间码/断开原因；
+- 激活码：新增卡密改 `data/vip_codes.json`（`type: "once"` 一次性、`type: "unlimited"` 不限次）；重置某个码的「已用/绑定」状态，删 `data/vip_codes.state.json` 里对应键即可，改完重启 PM2；
 - 健康检查：`curl http://127.0.0.1:3000/healthz`，返回 `{"ok":true,"words":2868,...}`；
 - 词库/代码更新后必须重启 PM2，服务只在启动时读取 `data/words.json`。
 
@@ -439,7 +442,8 @@ python scripts/check_typos.py
 ```text
 cet-arena/
 ├─ data/
-│  └─ words.json           # CET-4 词库（2868 词，多释义 + 词性 + 词频）
+│  ├─ words.json           # CET-4 词库（2868 词，多释义 + 词性 + 词频）
+│  └─ vip_codes.json       # 激活码种子（运行状态另存 vip_codes.state.json，不入库）
 ├─ public/
 │  ├─ index.html            # 单页五视图 + 模式选择 + 复盘 + 错词挑战
 │  ├─ styles.css            # 深色桌面/移动端样式
@@ -450,6 +454,7 @@ cet-arena/
 │  └─ check_typos.py        # 词库拼写/错别字体检（只读，输出 CSV 报告）
 ├─ src/
 │  ├─ app.js                # Express + Socket.IO 房间/抢答/竞速/单人挑战状态机
+│  ├─ vipCodes.js           # 激活码校验（一次性 / IP 绑定 / 并发锁 / 原子持久化）
 │  └─ wordBank.js           # 词库校验、单题生成、抽题、选项打乱
 ├─ test/
 │  ├─ e2e.test.js           # 抢答模式双客户端回归
@@ -457,6 +462,7 @@ cet-arena/
 │  ├─ mixed.test.js         # 混合题型压力测试（3 万+ 题）
 │  ├─ wrongbook.test.js     # 错词本纯逻辑（入库/连对/掌握/容错）
 │  ├─ solo.test.js          # 单人挑战服务端协议（出题/判分/退出）
+│  ├─ vip.test.js           # 激活码（特殊码/一码一用/IP 绑定/并发/建房闸门）
 │  ├─ solo-ui.test.js       # 前端假 DOM 集成（错词写入、着色、自动发音、答后释义）
 │  ├─ dom-contract.test.js  # DOM id 与脚本加载顺序契约
 │  └─ remote-smoke.js       # 公网 WebSocket 完整验收
@@ -489,6 +495,8 @@ cet-arena/
 - **自动播放兜底**：自动播报失败（`not-allowed` 等）不弹错误提示，只给 🔊 按钮加 `is-nudge` 动画；首次 `pointerdown` 时调用 `speechSynthesis.resume()` 唤醒引擎；`getVoices()` 为空时监听 `voiceschanged` 并在 700ms 后补播一次。
 - **重连**：创建/加入时返回随机 `sessionId`，刷新后 `room:resume` 恢复；竞速模式还会补发个人当前题、进度与惩罚截止时间。
 - **房间回收**：双方都离线时不再死等 30 分钟——对局已结束的房间**立即删除**；进行中的对局保留 `emptyRoomGraceMs`（默认 10 秒）供「刷新重连」，期间有人通过 `room:resume` 回来就取消回收；60 秒兜底扫描仅作为最后保险。
+- **激活码存储**：`data/vip_codes.json` 只存放种子卡密（入库）；运行状态（`used` / `boundIp` / `usedAt`）写入 `data/vip_codes.state.json`（已 gitignore），先写临时文件再 rename，保证原子性，也避免 `git pull` 与线上状态冲突。
+- **激活码防作弊**：验证逻辑全同步执行，进入临界区前加内存锁，同一毫秒的并发请求只有一个能完成「校验 + 标记已用 + 落盘」；一次性码首次使用即绑定请求 IP，换 IP 直接拒绝；`room:create` 在服务端二次校验 `socket.data.vip`，改前端脚本也无法绕过。
 - **审计日志**：连接、绑定玩家、断开、房间关闭都会输出一行 `[audit] {json}` 到 stdout（由 PM2 收集进 `cet-arena-out.log`，受 pm2-logrotate 10M×5 管理），字段含 ISO 时间、IP、昵称、房间码、在线时长、断开原因与剩余在线人数，便于排查异常与作弊。
 - **第三人限制**：房间固定最多 2 个玩家槽位；掉线玩家在房间清理前仍占位。
 - **内存清理**：双方都断线且超过 30 分钟的房间会被清理；正常退出会立即删除或转移房主。
@@ -623,6 +631,12 @@ cet-arena/
 - 错词本保存在浏览器 `localStorage`，按域名隔离：`localhost:3000` 与线上 `1.15.152.160:3000` 互不相通，清理浏览器数据也会一并清空；
 - 只有**走到结算页并渲染复盘**时才会入库，对局中途退出不会记录；
 - 想核对是否写入：F12 → Application → Local Storage → `cetArena.wrongBook.v1`，正常应为 `{"version":1,"words":[{"word":"breast","streak":0,"wrongCount":1,...}]}`。
+
+**激活码提示「该卡密已绑定其他设备」**
+
+- 一次性卡密首次验证成功即绑定当时的公网 IP；换网络（公司/热点/手机流量）、换设备都会触发这条提示；
+- 同一网络下刷新页面会自动静默重验，不会重复消耗；
+- 需要换设备使用，请联系站长重置该卡密的绑定状态（删 `data/vip_codes.state.json` 中对应条目后重启 PM2）。
 
 **本地执行命令提示「沙箱后端不可用」**
 

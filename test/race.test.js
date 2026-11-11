@@ -125,6 +125,7 @@ async function run() {
   const arena = createArenaServer({
     racePenaltyMs: 150,
     raceAdvanceDelayMs: 25,
+    vipRequired: false,
     cleanupIntervalMs: 60_000,
   });
 

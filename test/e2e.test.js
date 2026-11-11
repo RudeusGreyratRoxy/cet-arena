@@ -161,6 +161,7 @@ async function run() {
     questionMs: 900,
     revealMs: 100,
     startDelayMs: 100,
+    vipRequired: false,
     cleanupIntervalMs: 60_000,
   });
 
