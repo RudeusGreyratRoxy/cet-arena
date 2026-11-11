@@ -4,3 +4,6 @@ node_modules/
 *.log
 .DS_Store
 __probe_existing.txt
+
+# 本项目统一使用 pnpm-lock.yaml；服务器上用 npm install 生成的锁文件不入库
+package-lock.json
