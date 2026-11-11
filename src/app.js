@@ -928,24 +928,14 @@ function createArenaServer(options = {}) {
         ack({ ok: false, error: result.message, code: result.code });
         return;
       }
-      socket.data.vipTier = result.tier;
-      ack({ ok: true, tier: result.tier, message: result.message });
+      socket.data.vip = true;
+      ack({ ok: true, kind: result.kind, message: result.message });
     });
 
     on('room:create', (payload, ack) => {
-      if (config.vipRequired) {
-        if (!socket.data.vipTier) {
-          ack({ ok: false, error: '创建房间需要房主激活码', code: 'VIP_REQUIRED' });
-          return;
-        }
-        if (!['host', 'super_admin'].includes(socket.data.vipTier)) {
-          ack({
-            ok: false,
-            error: '这是单人码，只能用于加入房间；创建房间需要房主码',
-            code: 'VIP_TIER',
-          });
-          return;
-        }
+      if (config.vipRequired && socket.data.vip !== true) {
+        ack({ ok: false, error: '创建房间需要激活码', code: 'VIP_REQUIRED' });
+        return;
       }
       if (socket.data.roomCode) {
         ack({ ok: false, error: '你已经在一个房间中' });
@@ -994,7 +984,7 @@ function createArenaServer(options = {}) {
     });
 
     on('room:join', (payload, ack) => {
-      if (config.vipRequired && !socket.data.vipTier) {
+      if (config.vipRequired && socket.data.vip !== true) {
         ack({ ok: false, error: '加入房间需要激活码', code: 'VIP_REQUIRED' });
         return;
       }

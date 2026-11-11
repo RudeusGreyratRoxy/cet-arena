@@ -2589,3 +2589,37 @@ a:focus-visible {
   font-size: 12px;
   line-height: 1.6;
 }
+
+.vip-package {
+  margin-bottom: 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.vip-package-head {
+  display: flex;
+  margin-bottom: 4px;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.vip-package-head strong {
+  font-size: 15px;
+  letter-spacing: 0.01em;
+}
+
+.vip-package-desc {
+  margin: 0 0 12px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.vip-package .vip-pay {
+  width: 100%;
+  min-height: 44px;
+  background: linear-gradient(135deg, #07c160 0%, #1677ff 100%);
+}

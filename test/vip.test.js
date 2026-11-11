@@ -1,8 +1,10 @@
 'use strict';
 
 /**
- * 激活码分级测试：super_admin / host（房主码）/ player（单人码）。
- * 覆盖：类型权限、一码一用、IP 绑定、并发互斥、持久化、建房/加入闸门。
+ * 激活码测试（单一类型）：
+ * - unlimited 码不限次、不绑 IP；
+ * - 普通码一码一用、绑 IP、同 IP 可复用、并发互斥；
+ * - 验证通过后建房与加入都放行，未验证两者都拦截。
  */
 
 const assert = require('assert/strict');
@@ -20,13 +22,13 @@ const statePath = path.join(dir, 'vip_codes.state.json');
 fs.writeFileSync(
   seedPath,
   JSON.stringify({
-    version: 2,
+    version: 1,
     codes: {
-      BOSS888: { type: 'super_admin', label: '站长' },
-      '080323': { type: 'super_admin', label: '专属永久' },
-      HOST888: { type: 'host', label: '房主码' },
-      HOST666: { type: 'host', label: '房主码2' },
-      PLAY888: { type: 'player', label: '单人码' },
+      BOSS888: { type: 'unlimited', label: '站长' },
+      '080323': { type: 'unlimited', label: '专属永久' },
+      VIP888: { type: 'once', label: '单人码' },
+      VIP666: { type: 'once', label: '单人码' },
+      VIP777: { type: 'once', label: '并发测试' },
     },
   })
 );
@@ -73,31 +75,30 @@ function call(socket, event, payload) {
 
 async function main() {
   try {
-    console.log('=== 1. 类型与 tier ===');
+    console.log('=== 1. 特殊码 ===');
     resetState();
     const s1 = newStore();
-    const boss = s1.verify('BOSS888', '1.1.1.1');
-    ok('super_admin 验证通过且返回 tier', boss.ok === true && boss.tier === 'super_admin');
-    ok('super_admin 换 IP 仍通过', s1.verify('BOSS888', '2.2.2.2').ok === true);
-    const host = s1.verify('HOST888', '10.0.0.1');
-    ok('host 码返回 tier=host', host.ok === true && host.tier === 'host');
-    const player = s1.verify('PLAY888', '10.0.0.5');
-    ok('player 码返回 tier=player', player.ok === true && player.tier === 'player');
+    ok('BOSS888 通过且不限次', s1.verify('BOSS888', '1.1.1.1').ok === true && s1.verify('BOSS888', '2.2.2.2').ok === true);
+    ok('080323 通过且不限次', s1.verify('080323', '3.3.3.3').ok === true && s1.verify('080323', '4.4.4.4').ok === true);
+    ok('特殊码不写绑定状态', !fs.existsSync(statePath));
 
-    console.log('=== 2. 一次性与 IP 绑定（host / player 同规则）===');
-    ok('host 码同 IP 复用通过', s1.verify('HOST888', '10.0.0.1').ok === true);
-    const hostOther = s1.verify('HOST888', '10.0.0.2');
-    ok('host 码换 IP 被拒', hostOther.ok === false && hostOther.code === 'BOUND');
-    ok('player 码同 IP 复用通过', s1.verify('PLAY888', '10.0.0.5').ok === true);
-    const playerOther = s1.verify('PLAY888', '10.0.0.6');
-    ok('player 码换 IP 被拒', playerOther.ok === false && playerOther.code === 'BOUND');
+    console.log('=== 2. 普通码：一码一用 + IP 绑定 ===');
+    resetState();
+    const s2 = newStore();
+    const first = s2.verify('VIP888', '10.0.0.1');
+    ok('首次验证通过', first.ok === true && first.kind === 'once');
+    ok('首次写入 used + boundIp', fs.existsSync(statePath));
+    ok('同 IP 再次验证通过', s2.verify('VIP888', '10.0.0.1').ok === true);
+    const other = s2.verify('VIP888', '10.0.0.2');
+    ok('换 IP 被拒绝', other.ok === false && other.code === 'BOUND');
+    ok('拒绝提示正确', other.message === '该卡密已绑定其他设备');
 
     console.log('=== 3. 并发互斥 ===');
     resetState();
     const s3 = newStore();
-    const results = [1, 2, 3, 4].map((n) => s3.verify('HOST666', '10.1.0.' + n));
-    ok('并发只有一个成功', results.filter((r) => r.ok).length === 1);
-    ok('其余三个被拒', results.filter((r) => !r.ok).length === 3);
+    const results = [1, 2, 3, 4].map((n) => s3.verify('VIP777', '10.1.0.' + n));
+    ok('并发只有 1 个成功', results.filter((r) => r.ok).length === 1);
+    ok('其余 3 个被拒', results.filter((r) => !r.ok).length === 3);
 
     console.log('=== 4. 建房 / 加入闸门（socket 集成）===');
     resetState();
@@ -107,45 +108,35 @@ async function main() {
     const url = `http://127.0.0.1:${port}`;
 
     const guest = await connect(url, '10.2.0.1');
-    const guestCreate = await call(guest, 'room:create', { nickname: 'Guest' });
-    ok('未激活不能建房', guestCreate.ok === false && guestCreate.code === 'VIP_REQUIRED');
-    const guestJoin = await call(guest, 'room:join', { nickname: 'Guest', code: '123456' });
-    ok('未激活不能加入', guestJoin.ok === false && guestJoin.code === 'VIP_REQUIRED');
+    const gCreate = await call(guest, 'room:create', { nickname: 'Guest' });
+    const gJoin = await call(guest, 'room:join', { nickname: 'Guest', code: '123456' });
+    ok('未激活不能建房', gCreate.ok === false && gCreate.code === 'VIP_REQUIRED');
+    ok('未激活不能加入', gJoin.ok === false && gJoin.code === 'VIP_REQUIRED');
     guest.close();
 
-    const hostSocket = await connect(url, '10.2.0.2');
-    const hostVerify = await call(hostSocket, 'vip:verify', { code: 'HOST888' });
-    ok('房主码验证返回 host', hostVerify.ok === true && hostVerify.tier === 'host');
-    const created = await call(hostSocket, 'room:create', { nickname: '房主' });
-    ok('房主码可以建房', created.ok === true && /^\d{6}$/.test(created.room.code));
+    const host = await connect(url, '10.2.0.2');
+    const hv = await call(host, 'vip:verify', { code: 'VIP888' });
+    ok('普通码验证通过', hv.ok === true && hv.kind === 'once');
+    const created = await call(host, 'room:create', { nickname: '房主' });
+    ok('验证后可建房', created.ok === true && /^\d{6}$/.test(created.room.code));
 
-    const playerSocket = await connect(url, '10.2.0.3');
-    const playerVerify = await call(playerSocket, 'vip:verify', { code: 'PLAY888' });
-    ok('单人码验证返回 player', playerVerify.ok === true && playerVerify.tier === 'player');
+    const joiner = await connect(url, '10.2.0.3');
+    const jv = await call(joiner, 'vip:verify', { code: 'VIP666' });
+    ok('第二名玩家用自己的码验证通过', jv.ok === true);
+    const joined = await call(joiner, 'room:join', { nickname: '队友', code: created.room.code });
+    ok('验证后可加入他人房间', joined.ok === true && joined.room.players.length === 2);
 
-    const playerCreate = await call(playerSocket, 'room:create', { nickname: '单人' });
-    ok('单人码不能建房', playerCreate.ok === false && playerCreate.code === 'VIP_TIER');
-    ok('拒绝文案说明需要房主码', /房主码/.test(playerCreate.error || ''));
+    const noCode = await connect(url, '10.2.0.4');
+    const nc = await call(noCode, 'room:join', { nickname: '白嫖', code: created.room.code });
+    ok('没码的人无法挤进房间', nc.ok === false && nc.code === 'VIP_REQUIRED');
+    noCode.close();
 
-    const playerJoin = await call(playerSocket, 'room:join', {
-      nickname: '单人',
-      code: created.room.code,
-    });
-    ok('单人码可以加入房间', playerJoin.ok === true && playerJoin.room.players.length === 2);
-
-    const bossSocket = await connect(url, '10.2.0.4');
-    const bossVerify = await call(bossSocket, 'vip:verify', { code: '080323' });
-    ok('super_admin 验证通过', bossVerify.ok === true && bossVerify.tier === 'super_admin');
-    const bossCreate = await call(bossSocket, 'room:create', { nickname: '站长' });
-    ok('super_admin 可以建房', bossCreate.ok === true);
-
-    hostSocket.close();
-    playerSocket.close();
-    bossSocket.close();
+    host.close();
+    joiner.close();
     await arena.close();
 
     console.log('');
-    console.log(`激活码分级测试全部通过（${passed} 项断言）。`);
+    console.log(`激活码测试全部通过（${passed} 项断言）。`);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

@@ -9,7 +9,7 @@
       content="CET Arena：仅限两位好友通过 6 位房间码实时对战的四六级词汇竞技游戏。"
     />
     <title>CET Arena · 双人词汇对战</title>
-    <link rel="stylesheet" href="/styles.css?v=20261111-vip3" />
+    <link rel="stylesheet" href="/styles.css?v=20261111-vip4" />
   </head>
   <body data-view="loading">
     <div class="ambient ambient-one" aria-hidden="true"></div>
@@ -322,102 +322,70 @@
 
     <div class="vip-overlay" id="vipOverlay" hidden>
       <div class="vip-veil" aria-hidden="true"></div>
-      <div class="vip-card" role="dialog" aria-modal="true" aria-labelledby="vipHostTitle">
-        <section class="vip-step" id="vipStepHost" hidden>
-          <button class="vip-close" id="vipHostCloseBtn" type="button" aria-label="关闭">×</button>
-          <p class="vip-eyebrow">CET ARENA · HOST PASS</p>
-          <h2 class="vip-title" id="vipHostTitle">房主专属通道</h2>
-          <p class="vip-desc">创建房间需要房主码；好友加入只需单人码。</p>
+      <div class="vip-card" role="dialog" aria-modal="true" aria-labelledby="vipTitle">
+        <section class="vip-step" id="vipStepCode">
+          <button class="vip-close" id="vipCloseBtn" type="button" aria-label="关闭">×</button>
+          <p class="vip-eyebrow">CET ARENA · MEMBERS ONLY</p>
+          <h2 class="vip-title" id="vipTitle">VIP 专属通道</h2>
+          <p class="vip-desc">输入激活码后，即可创建房间或加入好友的房间。</p>
 
-          <label class="vip-label" for="vipHostInput">已有房主码？在此输入</label>
+          <label class="vip-label" for="vipCodeInput">已有激活码？在此输入</label>
           <input
             class="vip-input"
-            id="vipHostInput"
+            id="vipCodeInput"
             type="text"
             maxlength="24"
             autocomplete="off"
             autocapitalize="characters"
             spellcheck="false"
-            placeholder="请输入房主码"
+            placeholder="请输入激活码"
           />
-          <p class="vip-error" id="vipHostError" role="alert" hidden></p>
+          <p class="vip-error" id="vipError" role="alert" hidden></p>
 
-          <button class="vip-primary" id="vipHostVerifyBtn" type="button">验证并创建</button>
+          <button class="vip-primary" id="vipVerifyBtn" type="button">验证</button>
 
           <p class="vip-foot">
-            <span>没有房主码？</span>
-            <button class="vip-link" id="vipHostPayBtn" type="button">查看价格</button>
-          </p>
-        </section>
-
-        <section class="vip-step" id="vipStepPlayer" hidden>
-          <button class="vip-close" id="vipPlayerCloseBtn" type="button" aria-label="关闭">×</button>
-          <p class="vip-eyebrow">CET ARENA · PLAYER PASS</p>
-          <h2 class="vip-title" id="vipPlayerTitle">加入房间通道</h2>
-          <p class="vip-desc">加入好友房间需要单人码；房主码同样可用。</p>
-
-          <label class="vip-label" for="vipPlayerInput">已有单人码？在此输入</label>
-          <input
-            class="vip-input"
-            id="vipPlayerInput"
-            type="text"
-            maxlength="24"
-            autocomplete="off"
-            autocapitalize="characters"
-            spellcheck="false"
-            placeholder="请输入单人码"
-          />
-          <p class="vip-error" id="vipPlayerError" role="alert" hidden></p>
-
-          <button class="vip-primary" id="vipPlayerVerifyBtn" type="button">验证并加入</button>
-
-          <p class="vip-foot">
-            <span>没有单人码？</span>
-            <button class="vip-link" id="vipPlayerPayBtn" type="button">查看价格</button>
+            <span>没有激活码？</span>
+            <button class="vip-link" id="vipToPayBtn" type="button">查看套餐</button>
           </p>
         </section>
 
         <section class="vip-step" id="vipStepPay" hidden>
           <button class="vip-close" id="vipPayCloseBtn" type="button" aria-label="关闭">×</button>
           <p class="vip-eyebrow">CET ARENA · PASSES</p>
-          <h2 class="vip-title">选择会员类型</h2>
+          <h2 class="vip-title">选择套餐</h2>
 
-          <div class="vip-tier">
-            <div class="vip-tier-head">
-              <strong>房主码</strong>
+          <div class="vip-package">
+            <div class="vip-package-head">
+              <strong>单人成行</strong>
               <span class="vip-price">￥19.9</span>
             </div>
-            <p class="vip-tier-desc">可创建房间，也可用同一张码加入好友房间</p>
-            <div class="vip-pay-row">
-              <button class="vip-pay vip-pay--wechat" type="button" data-pay="host-wechat">
-                微信支付
-              </button>
-              <button class="vip-pay vip-pay--alipay" type="button" data-pay="host-alipay">
-                支付宝
-              </button>
-            </div>
+            <p class="vip-package-desc">含 1 个独立激活码，一码一人，绑本机 IP</p>
+            <button class="vip-pay" type="button" data-package="solo">立即开通</button>
           </div>
 
-          <div class="vip-tier">
-            <div class="vip-tier-head">
-              <strong>单人码</strong>
-              <span class="vip-price">￥9.9</span>
+          <div class="vip-package">
+            <div class="vip-package-head">
+              <strong>双人结伴</strong>
+              <span class="vip-price">￥29.9</span>
             </div>
-            <p class="vip-tier-desc">只能加入他人房间，不能建房</p>
-            <div class="vip-pay-row">
-              <button class="vip-pay vip-pay--wechat" type="button" data-pay="player-wechat">
-                微信支付
-              </button>
-              <button class="vip-pay vip-pay--alipay" type="button" data-pay="player-alipay">
-                支付宝
-              </button>
+            <p class="vip-package-desc">含 2 个独立激活码，各自绑定 IP，适合和室友互加</p>
+            <button class="vip-pay" type="button" data-package="duo">立即开通</button>
+          </div>
+
+          <div class="vip-package">
+            <div class="vip-package-head">
+              <strong>宿舍开黑</strong>
+              <span class="vip-price">￥59.9</span>
             </div>
+            <p class="vip-package-desc">含 6 个独立激活码，一人一码，适合整间宿舍</p>
+            <button class="vip-pay" type="button" data-package="dorm">立即开通</button>
           </div>
 
           <p class="vip-notice" id="vipNotice" role="status" hidden></p>
 
           <p class="vip-foot">
-            <button class="vip-link" id="vipBackBtn" type="button">返回输入激活码</button>
+            <button class="vip-link" id="vipBackBtn" type="button">已有激活码，返回输入</button>
           </p>
         </section>
       </div>
@@ -426,7 +394,7 @@
     <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
 
     <script src="/socket.io/socket.io.min.js"></script>
-    <script src="/wrongbook.js?v=20261111-vip3"></script>
-    <script src="/app.js?v=20261111-vip3"></script>
+    <script src="/wrongbook.js?v=20261111-vip4"></script>
+    <script src="/app.js?v=20261111-vip4"></script>
   </body>
 </html>
