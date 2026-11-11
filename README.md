@@ -397,6 +397,17 @@ fs.writeFileSync('data/words.json', JSON.stringify(words, null, 2));
 
 CSV 含逗号或释义数量更多时，请改用成熟 CSV 解析库，或直接维护 JSON。
 
+### 5.1 词库体检（拼写 / 错别字排查）
+
+```bash
+python scripts/check_typos.py
+```
+
+- **只读** `data/words.json`，只写 `reports/typo_report.csv`，不会改动词库；
+- 检查项：英文拼写（pyspellchecker，含英式拼法白名单）、非 a-z 字符 / 空白 / 大小写 / 异常长度 / 连续重复字母、中文常见错别字对照表、繁体字混入、词性黏连（如 `n自行车`）、括号不匹配、空释义、词频与 id 重复；
+- 报告字段：`单词, 问题类型, 可疑内容, 建议, 置信度`（置信度分 高/中/低，按置信度排序）；
+- 依赖：`pip install pyspellchecker`；未安装时脚本自动降级为纯规则检查，仍可运行。
+
 ## 6. 项目结构
 
 ```text
@@ -409,7 +420,8 @@ cet-arena/
 │  ├─ app.js                # Socket.IO 客户端、双模式状态、单人挑战、发音
 │  └─ wrongbook.js          # 错词本纯逻辑（localStorage 适配，可独立单测）
 ├─ scripts/
-│  └─ start-tunnel.ps1      # 便携版 Cloudflare Quick Tunnel
+│  ├─ start-tunnel.ps1      # 便携版 Cloudflare Quick Tunnel
+│  └─ check_typos.py        # 词库拼写/错别字体检（只读，输出 CSV 报告）
 ├─ src/
 │  ├─ app.js                # Express + Socket.IO 房间/抢答/竞速/单人挑战状态机
 │  └─ wordBank.js           # 词库校验、单题生成、抽题、选项打乱
@@ -583,3 +595,9 @@ cet-arena/
 - 错词本保存在浏览器 `localStorage`，按域名隔离：`localhost:3000` 与线上 `1.15.152.160:3000` 互不相通，清理浏览器数据也会一并清空；
 - 只有**走到结算页并渲染复盘**时才会入库，对局中途退出不会记录；
 - 想核对是否写入：F12 → Application → Local Storage → `cetArena.wrongBook.v1`，正常应为 `{"version":1,"words":[{"word":"breast","streak":0,"wrongCount":1,...}]}`。
+
+**本地执行命令提示「沙箱后端不可用」**
+
+- 原因：DSH 会话私有的沙箱临时目录（`%TEMP%\dsh-xxxxxx`）被清理工具删除后，命令执行器会 fail-closed 退出；
+- 处理：重建该目录，或把用户级 `TMP`/`TEMP` 指向不会被清理的固定目录（如 `C:\Users\Yuan\.dsh\tmp`）后重启 DSH；
+- 若某个目录在沙箱内报「拒绝访问」而资源管理器能打开，多半是它丢失了从上级目录继承的权限，可用 `icacls <目录> /inheritance:e /T` 恢复继承。
