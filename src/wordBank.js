@@ -94,7 +94,10 @@ function formatMeaning(item) {
   return `${item.pos} ${item.meaning}`;
 }
 
-const CHINESE_OPTION_PATTERN = /^(v|n|adj|adv)\.\s/;
+// 词性白名单：覆盖 CET 词库常见的缩写（vt./vi./a./ad./prep. 等），
+// 只用于校验“带词性的中文释义”这一呈现格式，不影响具体词性取值。
+const CHINESE_OPTION_PATTERN =
+  /^(?:v|vt|vi|aux|n|pron|num|adj|a|adv|ad|prep|conj|int|art|pl)\.\s/;
 const ENGLISH_WORD_PATTERN = /^[a-z]+$/;
 const LISTEN_PROMPT_LABEL = '点击喇叭听发音，选择正确的英文单词';
 

@@ -200,7 +200,7 @@ async function run() {
   if (syncA.question.type === 'en2zh') {
     assert.equal(syncA.question.prompt, syncA.question.word);
     assert(
-      syncA.question.options.every((option) => /^(v|n|adj|adv)\.\s/.test(option)),
+      syncA.question.options.every((option) => /^(?:v|vt|vi|aux|n|pron|num|adj|a|adv|ad|prep|conj|int|art|pl)\.\s/.test(option)),
       '英译中竞速选项也必须带词性'
     );
   } else if (syncA.question.type === 'zh2en') {
@@ -287,7 +287,7 @@ async function run() {
     assert(['en2zh', 'zh2en', 'listen'].includes(current.type));
     if (current.type === 'en2zh') {
       assert.equal(current.prompt, current.word);
-      assert(current.options.every((option) => /^(v|n|adj|adv)\.\s/.test(option)));
+      assert(current.options.every((option) => /^(?:v|vt|vi|aux|n|pron|num|adj|a|adv|ad|prep|conj|int|art|pl)\.\s/.test(option)));
     } else if (current.type === 'zh2en') {
       assert.equal(current.promptLabel, '选择正确的英文单词');
       assert(current.options.every((option) => /^[a-z]+$/.test(option)));

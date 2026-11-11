@@ -4,7 +4,7 @@ const assert = require('assert/strict');
 const { loadWords, buildQuestions, assertQuestionShape } = require('../src/wordBank');
 
 const words = loadWords();
-const POS_OPTION = /^(v|n|adj|adv)\.\s/;
+const POS_OPTION = /^(?:v|vt|vi|aux|n|pron|num|adj|a|adv|ad|prep|conj|int|art|pl)\.\s/;
 const ENGLISH_WORD = /^[a-z]+$/;
 const LISTEN_LABEL = '点击喇叭听发音，选择正确的英文单词';
 

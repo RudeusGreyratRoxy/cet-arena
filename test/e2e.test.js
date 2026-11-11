@@ -9,9 +9,13 @@ const { APP_VERSION } = require('../src/version');
 const words = loadWords();
 const wordMap = new Map(words.map((entry) => [entry.word, entry]));
 
-assert.equal(words.length, 200, 'CET-4 词库应包含 200 个单词');
+assert(words.length >= 1000, `CET-4 词库应包含至少 1000 个单词（当前 ${words.length} 个）`);
 assert(words.every((entry) => entry.level === 'CET4'), '当前只保留 CET-4 词库');
-assert.equal(new Set(words.map((entry) => entry.word)).size, 200, '200 个单词不能重复');
+assert.equal(
+  new Set(words.map((entry) => entry.word)).size,
+  words.length,
+  '单词不能重复'
+);
 
 const quizDeck = buildQuestions(words, 10, 'CET4');
 assert.equal(quizDeck.length, 10);
@@ -38,7 +42,7 @@ assert.equal(raceEn2zh + raceZh2en + raceListen, 25);
 assert(
   raceDeck.every((question) =>
     question.type === 'en2zh'
-      ? question.options.every((option) => /^(v|n|adj|adv)\.\s/.test(option))
+      ? question.options.every((option) => /^(?:v|vt|vi|aux|n|pron|num|adj|a|adv|ad|prep|conj|int|art|pl)\.\s/.test(option))
       : question.options.every((option) => /^[a-z]+$/.test(option))
   ),
   '三种题型的选项格式必须正确'
@@ -189,7 +193,7 @@ async function run() {
 
   const health = await fetch(`${url}/healthz`).then((response) => response.json());
   assert.equal(health.ok, true);
-  assert.equal(health.words, 200, '健康检查应显示 200 个词');
+  assert.equal(health.words, words.length, '健康检查的单词数应与词库一致');
   assert.equal(health.version, APP_VERSION);
 
   const outdatedSocket = io(url, {
@@ -304,7 +308,7 @@ async function run() {
       assert.equal(questionA.prompt, questionA.word);
       assert.equal(questionA.promptLabel, '选择正确的中文释义');
       assert(
-        questionA.options.every((option) => /^(v|n|adj|adv)\.\s/.test(option)),
+        questionA.options.every((option) => /^(?:v|vt|vi|aux|n|pron|num|adj|a|adv|ad|prep|conj|int|art|pl)\.\s/.test(option)),
         '英译中选项必须带词性'
       );
     } else if (questionA.type === 'zh2en') {

@@ -182,7 +182,7 @@ async function run() {
     if (questionA.type === 'en2zh') {
       assert.equal(questionA.prompt, questionA.word);
       assert(
-        questionA.options.every((option) => /^(v|n|adj|adv)\.\s/.test(option)),
+        questionA.options.every((option) => /^(?:v|vt|vi|aux|n|pron|num|adj|a|adv|ad|prep|conj|int|art|pl)\.\s/.test(option)),
         '英译中选项必须带词性'
       );
     } else if (questionA.type === 'zh2en') {
