@@ -343,6 +343,7 @@ cd /opt/cet-arena && git pull && pm2 restart cet-arena
 
 - 进程守护：`pm2 save` + `pm2 startup systemd -u ubuntu`，服务器重启后自动拉起；
 - 日志轮转：`pm2-logrotate`（10M 上限、保留 5 份）；
+- 审计日志：`pm2 logs cet-arena --nostream | grep '\[audit\]'` 可查连接/IP/昵称/房间码/断开原因；
 - 健康检查：`curl http://127.0.0.1:3000/healthz`，返回 `{"ok":true,"words":2868,...}`；
 - 词库/代码更新后必须重启 PM2，服务只在启动时读取 `data/words.json`。
 
@@ -487,6 +488,8 @@ cet-arena/
 - **作答后才下发答案**：`game:answer` 与 `solo:answer` 的 ack 才携带 `correctIndex`；听音题的中文释义只在作答后以 `reveal` 字段下发（竞速模式在答错冷却期展示，抢答与单人即时展示）。题目事件本身仍然不含答案。
 - **自动播放兜底**：自动播报失败（`not-allowed` 等）不弹错误提示，只给 🔊 按钮加 `is-nudge` 动画；首次 `pointerdown` 时调用 `speechSynthesis.resume()` 唤醒引擎；`getVoices()` 为空时监听 `voiceschanged` 并在 700ms 后补播一次。
 - **重连**：创建/加入时返回随机 `sessionId`，刷新后 `room:resume` 恢复；竞速模式还会补发个人当前题、进度与惩罚截止时间。
+- **房间回收**：双方都离线时不再死等 30 分钟——对局已结束的房间**立即删除**；进行中的对局保留 `emptyRoomGraceMs`（默认 10 秒）供「刷新重连」，期间有人通过 `room:resume` 回来就取消回收；60 秒兜底扫描仅作为最后保险。
+- **审计日志**：连接、绑定玩家、断开、房间关闭都会输出一行 `[audit] {json}` 到 stdout（由 PM2 收集进 `cet-arena-out.log`，受 pm2-logrotate 10M×5 管理），字段含 ISO 时间、IP、昵称、房间码、在线时长、断开原因与剩余在线人数，便于排查异常与作弊。
 - **第三人限制**：房间固定最多 2 个玩家槽位；掉线玩家在房间清理前仍占位。
 - **内存清理**：双方都断线且超过 30 分钟的房间会被清理；正常退出会立即删除或转移房主。
 

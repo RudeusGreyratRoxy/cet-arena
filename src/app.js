@@ -16,6 +16,8 @@ const DEFAULT_CONFIG = {
   racePenaltyMs: 1_000,
   raceAdvanceDelayMs: 250,
   roomTtlMs: 30 * 60 * 1000,
+  // 双方都离线后，未结束的对局保留多久用于「刷新重连」；结束后立即回收。
+  emptyRoomGraceMs: 10 * 1000,
   cleanupIntervalMs: 60 * 1000,
   maxNicknameLength: 20,
 };
@@ -239,6 +241,16 @@ function createArenaServer(options = {}) {
     sessions.set(player.sessionId, { roomCode: room.code, playerId: player.id });
     socketPlayers.set(socket.id, { roomCode: room.code, playerId: player.id });
     room.lastActivityAt = Date.now();
+    // 有人回来了，取消「空房间回收」
+    cancelEmptyRoomCleanup(room);
+    audit('player_bind', {
+      ip: clientIp(socket),
+      nickname: player.nickname,
+      room: room.code,
+      playerId: player.id,
+      mode: room.mode,
+      status: room.status,
+    });
   }
 
   function clearGameTimers(room) {
@@ -263,12 +275,68 @@ function createArenaServer(options = {}) {
   }
 
   function deleteRoom(room) {
+    cancelEmptyRoomCleanup(room);
     clearGameTimers(room);
     for (const player of room.players) {
       sessions.delete(player.sessionId);
     }
     io.to(room.code).emit('room:closed', { reason: '房间已关闭' });
     rooms.delete(room.code);
+    audit('room_closed', {
+      room: room.code,
+      status: room.status,
+      players: room.players.map((player) => player.nickname),
+    });
+  }
+
+  // ---------------------------------------------------------------
+  // 房间生命周期：双方都离线后尽快回收，不再死等 30 分钟。
+  // 对局已结束 → 立即回收；对局进行中 → 留 emptyRoomGraceMs 给「刷新重连」。
+  // ---------------------------------------------------------------
+  function hasConnectedPlayer(room) {
+    return room.players.some((player) => player.connected);
+  }
+
+  function cancelEmptyRoomCleanup(room) {
+    if (!room.emptyTimer) return;
+    clearTimeout(room.emptyTimer);
+    room.emptyTimer = null;
+  }
+
+  function scheduleEmptyRoomCleanup(room) {
+    if (!rooms.has(room.code)) return;
+    if (hasConnectedPlayer(room)) {
+      cancelEmptyRoomCleanup(room);
+      return;
+    }
+    if (room.emptyTimer) return;
+
+    const delay = room.status === 'finished' ? 0 : config.emptyRoomGraceMs;
+    room.emptyTimer = setTimeout(() => {
+      room.emptyTimer = null;
+      if (!rooms.has(room.code)) return;
+      if (hasConnectedPlayer(room)) return;
+      deleteRoom(room);
+    }, delay);
+    if (typeof room.emptyTimer.unref === 'function') room.emptyTimer.unref();
+  }
+
+  // ---------------------------------------------------------------
+  // 审计日志：连接 / 绑定玩家 / 断开 / 房间关闭，含 IP、昵称、房间码。
+  // 输出到 stdout，由 PM2 收集（pm2-logrotate 负责切分）。
+  // ---------------------------------------------------------------
+  function clientIp(socket) {
+    const forwarded = socket.handshake?.headers?.['x-forwarded-for'];
+    const raw = (Array.isArray(forwarded) ? forwarded[0] : forwarded) || socket.handshake?.address || '';
+    return String(raw).split(',')[0].trim().replace(/^::ffff:/, '');
+  }
+
+  function audit(event, fields = {}) {
+    try {
+      console.log('[audit] ' + JSON.stringify({ ts: new Date().toISOString(), event, ...fields }));
+    } catch (error) {
+      // 日志本身不能影响业务
+    }
   }
 
   function startQuestion(room, questionIndex) {
@@ -476,6 +544,8 @@ function createArenaServer(options = {}) {
 
     io.to(room.code).emit('game:over', final);
     broadcastRoom(room);
+    // 若此刻双方都已离线，结束后立即回收房间。
+    scheduleEmptyRoomCleanup(room);
   }
 
   function raceProgress(room) {
@@ -678,6 +748,7 @@ function createArenaServer(options = {}) {
 
     io.to(room.code).emit('game:over', final);
     broadcastRoom(room);
+    scheduleEmptyRoomCleanup(room);
   }
 
   function scheduleStart(room) {
@@ -866,6 +937,7 @@ function createArenaServer(options = {}) {
         players: [],
         game: null,
         startTimer: null,
+        emptyTimer: null,
       };
       const player = newPlayer(nickname);
       room.hostId = player.id;
@@ -875,6 +947,13 @@ function createArenaServer(options = {}) {
 
       ack({ ok: true, playerId: player.id, sessionId: player.sessionId, room: roomView(room) });
       broadcastRoom(room);
+      audit('room_created', {
+        room: room.code,
+        nickname,
+        ip: clientIp(socket),
+        mode: room.mode,
+        level: room.level,
+      });
     });
 
     on('room:join', (payload, ack) => {
@@ -1425,16 +1504,42 @@ function createArenaServer(options = {}) {
         }
         room.lastActivityAt = Date.now();
         broadcastRoom(room);
+        // 剩下的人若恰好已离线，也要能触发回收。
+        scheduleEmptyRoomCleanup(room);
       }
       ack({ ok: true });
     });
 
-    socket.on('disconnect', () => {
+    socket.on('disconnect', (reason) => {
       const reference = socketPlayers.get(socket.id);
-      if (!reference) return;
+      const durationMs = socket.data.connectedAt
+        ? Date.now() - socket.data.connectedAt
+        : null;
+
+      if (!reference) {
+        audit('socket_disconnect', {
+          ip: clientIp(socket),
+          sid: socket.id,
+          reason,
+          durationMs,
+          room: null,
+        });
+        return;
+      }
+
       socketPlayers.delete(socket.id);
       const room = rooms.get(reference.roomCode);
-      if (!room) return;
+      if (!room) {
+        audit('socket_disconnect', {
+          ip: clientIp(socket),
+          sid: socket.id,
+          reason,
+          durationMs,
+          room: reference.roomCode,
+          playerId: reference.playerId,
+        });
+        return;
+      }
       const player = room.players.find((candidate) => candidate.id === reference.playerId);
       if (!player || player.socketId !== socket.id) return;
 
@@ -1442,10 +1547,32 @@ function createArenaServer(options = {}) {
       player.socketId = null;
       room.lastActivityAt = Date.now();
       broadcastRoom(room);
+
+      const connectedPlayers = room.players.filter((candidate) => candidate.connected).length;
+      audit('socket_disconnect', {
+        ip: clientIp(socket),
+        sid: socket.id,
+        reason,
+        durationMs,
+        room: room.code,
+        playerId: player.id,
+        nickname: player.nickname,
+        status: room.status,
+        connectedPlayers,
+      });
+
+      // 最后一个人也走了：结束后立即回收，进行中给一个短暂宽限期。
+      scheduleEmptyRoomCleanup(room);
     });
   }
 
   io.on('connection', (socket) => {
+    socket.data.connectedAt = Date.now();
+    audit('socket_connect', {
+      ip: clientIp(socket),
+      sid: socket.id,
+      ua: String(socket.handshake?.headers?.['user-agent'] || '').slice(0, 80),
+    });
     registerSocket(socket);
   });
 
@@ -1463,6 +1590,7 @@ function createArenaServer(options = {}) {
   function close() {
     clearInterval(cleanupTimer);
     for (const room of [...rooms.values()]) {
+      cancelEmptyRoomCleanup(room);
       clearGameTimers(room);
     }
     rooms.clear();
