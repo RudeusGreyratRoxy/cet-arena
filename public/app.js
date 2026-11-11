@@ -6,9 +6,9 @@
     room: 'cetArena.roomCode',
     nickname: 'cetArena.nickname',
   };
-  const APP_VERSION = '20261109-native1';
+  const APP_VERSION = '20261111-wrongbook3';
 
-  const VIEW_IDS = ['loading', 'home', 'room', 'game', 'result'];
+  const VIEW_IDS = ['loading', 'home', 'room', 'game', 'result', 'solo'];
   const LETTERS = ['A', 'B', 'C', 'D'];
 
   const el = {
@@ -22,6 +22,29 @@
     createBtn: document.getElementById('createBtn'),
     joinBtn: document.getElementById('joinBtn'),
     homeError: document.getElementById('homeError'),
+    wrongChallengeBtn: document.getElementById('wrongChallengeBtn'),
+    wrongBookCount: document.getElementById('wrongBookCount'),
+    wrongBookHint: document.getElementById('wrongBookHint'),
+    soloExitBtn: document.getElementById('soloExitBtn'),
+    soloPlay: document.getElementById('soloPlay'),
+    soloSummary: document.getElementById('soloSummary'),
+    soloSummaryTitle: document.getElementById('soloSummaryTitle'),
+    soloSummaryCopy: document.getElementById('soloSummaryCopy'),
+    soloAgainBtn: document.getElementById('soloAgainBtn'),
+    soloHomeBtn: document.getElementById('soloHomeBtn'),
+    soloRemaining: document.getElementById('soloRemaining'),
+    soloMastered: document.getElementById('soloMastered'),
+    soloAnswered: document.getElementById('soloAnswered'),
+    soloPrompt: document.getElementById('soloPrompt'),
+    soloQuestionWord: document.getElementById('soloQuestionWord'),
+    soloWordText: document.getElementById('soloWordText'),
+    soloSpeakBtn: document.getElementById('soloSpeakBtn'),
+    soloOptions: document.getElementById('soloOptions'),
+    soloReveal: document.getElementById('soloReveal'),
+    answerReveal: document.getElementById('answerReveal'),
+    soloFeedback: document.getElementById('soloFeedback'),
+    soloDots: document.getElementById('soloDots'),
+    soloStreakValue: document.getElementById('soloStreakValue'),
     lobbyCode: document.getElementById('lobbyCode'),
     roomLevelBadge: document.getElementById('roomLevelBadge'),
     shareCode: document.getElementById('shareCode'),
@@ -106,6 +129,16 @@
     },
     toastTimer: null,
     connectErrorShown: false,
+    solo: {
+      active: false,
+      total: 0,
+      answered: 0,
+      correct: 0,
+      mastered: 0,
+      current: null,
+      busy: false,
+      lastWordId: null,
+    },
   };
 
   init();
@@ -119,6 +152,7 @@
     }
 
     bindUiEvents();
+    refreshWrongBookUi();
     if (state.sessionId) {
       setView('loading');
     } else {
@@ -150,6 +184,18 @@
     el.levelSelect.addEventListener('change', () => setRoomLevel(el.levelSelect.value));
     el.speakBtn.addEventListener('click', handleSpeakTrigger);
     el.speakBtn.addEventListener('touchend', handleSpeakTrigger);
+    el.wrongChallengeBtn.addEventListener('click', startWrongChallenge);
+    el.soloExitBtn.addEventListener('click', exitSolo);
+    el.soloAgainBtn.addEventListener('click', startWrongChallenge);
+    el.soloHomeBtn.addEventListener('click', () => setView('home'));
+    el.soloSpeakBtn.addEventListener('click', handleSpeakTrigger);
+    el.soloSpeakBtn.addEventListener('touchend', handleSpeakTrigger);
+
+    // 首次交互时唤醒语音引擎（Chrome 在页面未交互时会挂起语音队列）。
+    window.addEventListener('pointerdown', ensureSpeechReady, {
+      once: true,
+      passive: true,
+    });
   }
 
   function connectSocket() {
@@ -184,6 +230,12 @@
       stopPingLoop();
       setPing(null);
       setActionsOffline();
+      if (state.solo.active) {
+        state.solo.active = false;
+        showToast('连接断开，错词挑战已暂停，进度已保存', 'error');
+        setView('home');
+        refreshWrongBookUi();
+      }
       if (state.room) {
         el.reconnectBanner.hidden = false;
       }
@@ -767,6 +819,7 @@
   function renderRaceQuestion(question) {
     setRaceUi(true);
     clearRaceCooldown();
+    hideAnswerReveal(el.answerReveal);
     el.questionIndex.textContent = String(question.index);
     el.questionTotal.textContent = String(question.total);
     el.questionLevel.textContent = `${levelLabel(question.level)} · 竞速`;
@@ -800,6 +853,11 @@
     updateOpponentStatus();
     if (state.race.startedAt) {
       startRaceClock(state.race.startedAt, Date.now() + state.race.serverOffset);
+    }
+
+    // 竞速模式同样有听音题，出现即自动播报。
+    if (question.type === 'listen') {
+      scheduleAutoSpeak(question.word, () => state.currentQuestion === question);
     }
   }
 
@@ -963,10 +1021,12 @@
     playSpeech(state.speechWord);
   }
 
-  function playSpeech(word) {
+  function playSpeech(word, options = {}) {
+    const silent = options.silent === true;
     if (!word) return false;
     if (!isSpeechSupported()) {
-      showSpeechUnsupported();
+      if (silent) nudgeSpeakButton();
+      else showSpeechUnsupported();
       return false;
     }
     const synth = window.speechSynthesis;
@@ -995,7 +1055,9 @@
             event.error
           )
         ) {
-          showSpeechUnsupported();
+          // 自动播放被浏览器拦截时不要弹错误提示，只提示用户点喇叭。
+          if (silent) nudgeSpeakButton();
+          else showSpeechUnsupported();
         }
       };
 
@@ -1005,8 +1067,112 @@
       return true;
     } catch (error) {
       console.warn('语音播放失败', error);
-      showSpeechUnsupported();
+      if (silent) nudgeSpeakButton();
+      else showSpeechUnsupported();
       return false;
+    }
+  }
+
+  /**
+   * 自动播放失败时的兜底：让喇叭按钮轻微跳动，引导用户手动点击。
+   */
+  function nudgeSpeakButton() {
+    for (const button of [el.speakBtn, el.soloSpeakBtn]) {
+      if (!button || button.hidden) continue;
+      button.classList.remove('is-nudge');
+      // 读取 offsetWidth 以重启动画（无此属性的环境会得到 undefined，无害）。
+      void button.offsetWidth;
+      button.classList.add('is-nudge');
+      button.title = '点击喇叭播放发音';
+    }
+  }
+
+  function ensureSpeechReady() {
+    try {
+      const synth = window.speechSynthesis;
+      if (synth && synth.paused) synth.resume();
+    } catch (error) {
+      /* 某些 WebView 不支持 resume，忽略 */
+    }
+  }
+
+  /**
+   * 尝试自动播报（静默失败）。
+   * 语音列表在部分浏览器里是异步加载的，若暂时为空则等 voiceschanged /
+   * 700ms 后再试一次，避免第一次进页面听不到声音。
+   */
+  function tryAutoSpeak(word) {
+    if (!word || !isSpeechSupported()) return false;
+    ensureSpeechReady();
+    const synth = window.speechSynthesis;
+    let voices = [];
+    try {
+      voices = synth.getVoices() || [];
+    } catch (error) {
+      voices = [];
+    }
+    if (voices.length > 0) return playSpeech(word, { silent: true });
+
+    let spoke = false;
+    const speakOnce = () => {
+      if (spoke) return;
+      spoke = true;
+      playSpeech(word, { silent: true });
+    };
+    try {
+      synth.addEventListener('voiceschanged', speakOnce, { once: true });
+    } catch (error) {
+      /* 老浏览器不支持 options，忽略 */
+    }
+    window.setTimeout(speakOnce, 700);
+    return true;
+  }
+
+  /**
+   * 延迟一点点再播，确保题目已经渲染完；
+   * isStillCurrent 用于防止用户已切题后还播上一题的单词。
+   */
+  function scheduleAutoSpeak(word, isStillCurrent) {
+    if (!word) return;
+    window.setTimeout(() => {
+      if (typeof isStillCurrent === 'function' && !isStillCurrent()) return;
+      tryAutoSpeak(word);
+    }, 260);
+  }
+
+  function renderAnswerReveal(node, word, meanings) {
+    if (!node) return;
+    if (!word || !Array.isArray(meanings) || meanings.length === 0) {
+      node.hidden = true;
+      node.replaceChildren();
+      return;
+    }
+    node.replaceChildren();
+
+    const label = document.createElement('span');
+    label.className = 'answer-reveal-label';
+    label.textContent = '中文含义';
+
+    const body = document.createElement('span');
+    body.className = 'answer-reveal-body';
+    const wordEl = document.createElement('strong');
+    wordEl.textContent = word;
+    body.append(wordEl, document.createTextNode(' — '));
+    body.append(
+      document.createTextNode(
+        meanings.map((meaning) => `${meaning.pos} ${meaning.meaning}`).join('；')
+      )
+    );
+
+    node.append(label, body);
+    node.hidden = false;
+  }
+
+  function hideAnswerReveal(...nodes) {
+    for (const node of nodes) {
+      if (!node) continue;
+      node.hidden = true;
+      node.replaceChildren();
     }
   }
 
@@ -1049,6 +1215,7 @@
   function renderQuestion(question) {
     setRaceUi(false);
     state.race.active = false;
+    hideAnswerReveal(el.answerReveal);
     el.questionIndex.textContent = String(question.index);
     el.questionTotal.textContent = String(question.total);
     el.questionLevel.textContent = `${levelLabel(question.level)} · 抢答`;
@@ -1092,6 +1259,11 @@
     }
 
     updateOpponentStatus();
+
+    // 听音选词：题目出现后自动播报一次（失败则保留喇叭按钮兜底）。
+    if (question.type === 'listen') {
+      scheduleAutoSpeak(question.word, () => state.currentQuestion === question);
+    }
   }
 
   function renderRaceWaiting() {
@@ -1109,6 +1281,7 @@
     state.selectedIndex = null;
     state.answerLocked = true;
     setRaceUi(true);
+    hideAnswerReveal(el.answerReveal);
     stopCountdown();
     clearRaceCooldown();
 
@@ -1129,6 +1302,7 @@
   }
 
   function renderGamePending(room) {
+    hideAnswerReveal(el.answerReveal);
     const game = room.game || {};
     if (room.mode === 'race') {
       const mine = state.race.progress.find((entry) => entry.id === state.playerId);
@@ -1204,6 +1378,11 @@
 
     state.answeredCorrect = Boolean(result.correct);
     updatePlayerScore(state.playerId, result.score);
+
+    // 听音选词答完立即展示中文含义，方便当场复盘。
+    if (result.reveal) {
+      renderAnswerReveal(el.answerReveal, result.reveal.word, result.reveal.meanings);
+    }
 
     if (result.correct) {
       if (selected) selected.classList.add('is-correct');
@@ -1286,6 +1465,10 @@
         selected.classList.remove('is-selected');
         selected.classList.add('is-wrong');
       }
+      // 听音题答错时利用冷却的 1 秒展示中文含义，帮助当场记忆。
+      if (result.reveal) {
+        renderAnswerReveal(el.answerReveal, result.reveal.word, result.reveal.meanings);
+      }
       state.race.lockedUntil = result.lockedUntil || 0;
       setFeedback('答错了，冷却 1 秒后才能继续。', 'wrong');
       startRaceCooldown(result.lockedUntil, result.serverNow);
@@ -1329,6 +1512,11 @@
     const detailParts = [`正确答案：${result.correctMeaning}`];
     let main = '';
     let kind = 'info';
+
+    // 听音选词：本题结束后同样展示中文含义（没作答的人也能复盘）。
+    if (result.type === 'listen') {
+      renderAnswerReveal(el.answerReveal, result.word, result.meanings);
+    }
 
     if (iWon) {
       main = '抢答成功，+10 分！';
@@ -1832,6 +2020,350 @@
       item.append(icon, content);
       el.reviewList.append(item);
     }
+
+    // 答错的单词自动进入错词本（含“答错后改正”的情况）。
+    const recorded = recordMistakesToBook(review);
+    if (recorded.added > 0) {
+      el.reviewSummary.textContent += ` · ${recorded.added} 个新错词已存入错词本`;
+    }
+    if (recorded.added > 0 || recorded.updated > 0) {
+      refreshWrongBookUi();
+    }
+  }
+
+  // ---------------------------------------------------------------
+  // 错词本 + 单人错词挑战
+  // ---------------------------------------------------------------
+  function wrongBookApi() {
+    return typeof window !== 'undefined' ? window.WrongBook || null : null;
+  }
+
+  function readWrongBook() {
+    const api = wrongBookApi();
+    return api ? api.load(window.localStorage) : { version: 1, words: [] };
+  }
+
+  function persistWrongBook(book) {
+    const api = wrongBookApi();
+    if (api) api.save(window.localStorage, book);
+    refreshWrongBookUi(book);
+    return book;
+  }
+
+  function refreshWrongBookUi(book) {
+    const api = wrongBookApi();
+    const current = book || readWrongBook();
+    const total = api ? api.count(current) : 0;
+    if (el.wrongBookCount) el.wrongBookCount.textContent = String(total);
+    if (el.wrongBookHint) {
+      el.wrongBookHint.textContent = total
+        ? `错词本里还有 ${total} 个单词`
+        : '错词本为空';
+    }
+    if (el.wrongChallengeBtn) {
+      el.wrongChallengeBtn.classList.toggle('is-empty', total === 0);
+    }
+  }
+
+  /**
+   * 结算页里答错的单词写入 localStorage。返回新增/更新数量。
+   */
+  function recordMistakesToBook(review) {
+    const api = wrongBookApi();
+    if (!api || !Array.isArray(review) || review.length === 0) {
+      return { added: 0, updated: 0 };
+    }
+    const missed = review
+      .filter((entry) => {
+        const status = entry.statuses?.[state.playerId] || 'unanswered';
+        const hadMistake = Boolean(
+          entry.mistakes && entry.mistakes[state.playerId]
+        );
+        return status === 'wrong' || hadMistake;
+      })
+      // 复盘条目只有 word（没有 id），错词本以 word 为唯一键。
+      .map((entry) => ({
+        word: entry.word,
+        level: entry.level,
+      }));
+
+    if (missed.length === 0) return { added: 0, updated: 0 };
+    const result = api.addMistakes(readWrongBook(), missed);
+    if (result.added === 0 && result.updated === 0) {
+      console.warn('[wrongbook] 检测到答错单词但未能写入错词本', missed);
+      return { added: 0, updated: 0 };
+    }
+    persistWrongBook(result.book);
+    return { added: result.added, updated: result.updated };
+  }
+
+  async function startWrongChallenge() {
+    const api = wrongBookApi();
+    const book = readWrongBook();
+    const total = api ? api.count(book) : 0;
+    if (total === 0) {
+      showToast('当前没有错词，快去打一局吧', 'info');
+      return;
+    }
+    if (!state.socket || !state.socket.connected) {
+      showToast('尚未连接服务器，请稍候再试', 'error');
+      return;
+    }
+
+    const words = book.words.map((entry) => entry.word);
+    const started = await request('solo:start', { words });
+    if (!started.ok) {
+      showToast(started.error || '无法开始错词挑战', 'error');
+      return;
+    }
+
+    state.solo = {
+      active: true,
+      total: started.total || words.length,
+      answered: 0,
+      correct: 0,
+      mastered: 0,
+      current: null,
+      busy: false,
+      lastWordId: null,
+    };
+    el.soloSummary.hidden = true;
+    el.soloPlay.hidden = false;
+    el.soloFeedback.textContent = '';
+    setView('solo');
+    updateSoloStats();
+    await nextSoloQuestion();
+  }
+
+  async function nextSoloQuestion() {
+    if (!state.solo.active) return;
+    const remaining = readWrongBook().words;
+    if (remaining.length === 0) {
+      finishSolo();
+      return;
+    }
+    updateSoloStats();
+    setSoloFeedback('正在抽题…', 'info');
+
+    const response = await request('solo:next', {
+      words: remaining.map((entry) => entry.word),
+    });
+    if (!state.solo.active) return;
+    if (!response.ok || !response.question) {
+      setSoloFeedback('', '');
+      showToast(response.error || '抽题失败，请重试', 'error');
+      return;
+    }
+
+    state.solo.current = response.question;
+    state.solo.lastWordId = response.question.id;
+    state.solo.busy = false;
+    renderSoloQuestion(response.question);
+  }
+
+  function renderSoloQuestion(question) {
+    hideAnswerReveal(el.soloReveal);
+    const isListen = question.type === 'listen';
+    const isZh2en = question.type === 'zh2en';
+
+    el.soloPrompt.textContent =
+      question.promptLabel ||
+      (isListen ? '点击喇叭听发音，选择正确的英文单词' : '选择正确的中文释义');
+    el.soloQuestionWord.classList.toggle('is-cn-prompt', isZh2en);
+    el.soloQuestionWord.classList.toggle('is-listen', isListen);
+    el.soloWordText.textContent = isListen
+      ? ''
+      : question.prompt || question.word || '';
+    state.speechWord = isListen || question.type === 'en2zh' ? question.word : '';
+    el.soloSpeakBtn.hidden = !state.speechWord;
+    if (state.speechWord && !isSpeechSupported()) showSpeechUnsupported();
+
+    el.soloOptions.replaceChildren();
+    question.options.forEach((text, index) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'option';
+      button.dataset.index = String(index);
+
+      const key = document.createElement('span');
+      key.className = 'option-key';
+      key.textContent = LETTERS[index] || String(index + 1);
+
+      const label = document.createElement('span');
+      label.className = 'option-text';
+      label.textContent = text;
+
+      button.append(key, label);
+      button.addEventListener('click', () => answerSolo(index));
+      el.soloOptions.append(button);
+    });
+
+    setSoloFeedback('', '');
+    updateSoloStreak(question.word);
+    updateSoloStats();
+
+    // 听音题需要主动听，进入题目时自动播一次，失败则保留喇叭按钮兜底。
+    if (isListen) {
+      scheduleAutoSpeak(question.word, () => state.solo.current === question);
+    }
+  }
+
+  async function answerSolo(index) {
+    const solo = state.solo;
+    if (!solo.active || solo.busy || !solo.current) return;
+    const question = solo.current;
+    solo.busy = true;
+    disableSoloOptions();
+
+    const response = await request('solo:answer', { index });
+    if (!response.ok) {
+      solo.busy = false;
+      enableSoloOptions();
+      showToast(response.error || '提交失败，请重试', 'error');
+      return;
+    }
+
+    const api = wrongBookApi();
+    solo.answered += 1;
+
+    // 服务端只会在作答后下发 correctIndex；拿不到时用正确答案文本兜底，
+    // 避免把正确选项误标成红色。
+    const correctIndex = Number.isInteger(response.correctIndex)
+      ? response.correctIndex
+      : question.options.indexOf(response.correctText);
+
+    [...el.soloOptions.children].forEach((button, optionIndex) => {
+      button.classList.add('is-locked');
+      if (optionIndex === correctIndex) {
+        button.classList.add('is-correct');
+      } else if (optionIndex === index) {
+        button.classList.add('is-wrong');
+      } else {
+        button.classList.add('is-dimmed');
+      }
+    });
+
+    if (question.type === 'listen') {
+      renderAnswerReveal(
+        el.soloReveal,
+        response.word || question.word,
+        response.meanings
+      );
+    }
+
+    let streak = 0;
+    let mastered = false;
+
+    if (response.correct) {
+      solo.correct += 1;
+      const result = api.markCorrect(readWrongBook(), question.word);
+      persistWrongBook(result.book);
+      streak = result.streak;
+      mastered = result.mastered;
+      if (mastered) {
+        solo.mastered += 1;
+        setSoloFeedback(
+          `✅ 连续答对 3 次，「${question.word}」已移出错词本`,
+          'correct'
+        );
+      } else {
+        setSoloFeedback(`✅ 答对了，连对 ${result.streak}/3`, 'correct');
+      }
+    } else {
+      const result = api.markWrong(readWrongBook(), question.word);
+      persistWrongBook(result.book);
+      setSoloFeedback(
+        `❌ 答错了，正确答案是「${response.correctText}」，连对已清零`,
+        'wrong'
+      );
+    }
+
+    updateSoloStreak(question.word, mastered ? 3 : streak);
+    updateSoloStats();
+
+    const delay = mastered ? 1500 : 1000;
+    window.setTimeout(() => {
+      if (!state.solo.active) return;
+      if (readWrongBook().words.length === 0) finishSolo();
+      else nextSoloQuestion();
+    }, delay);
+  }
+
+  function finishSolo() {
+    if (!state.solo.active) return;
+    state.solo.active = false;
+    state.solo.current = null;
+    stopSpeech();
+
+    el.soloPlay.hidden = true;
+    el.soloSummary.hidden = false;
+    el.soloSummaryTitle.textContent =
+      state.solo.mastered > 0 ? '本轮错词已全部掌握 🎉' : '挑战结束';
+    el.soloSummaryCopy.textContent =
+      `本轮作答 ${state.solo.answered} 题，答对 ${state.solo.correct} 题，` +
+      `掌握并移出错词本 ${state.solo.mastered} 个单词。`;
+    refreshWrongBookUi();
+  }
+
+  function exitSolo() {
+    if (!state.solo.active && el.soloSummary.hidden) {
+      setView('home');
+      return;
+    }
+    state.solo.active = false;
+    state.solo.current = null;
+    stopSpeech();
+    if (state.socket && state.socket.connected) {
+      state.socket.emit('solo:quit', {});
+    }
+    setView('home');
+    refreshWrongBookUi();
+  }
+
+  function setSoloFeedback(text, kind) {
+    el.soloFeedback.textContent = text;
+    el.soloFeedback.className = `feedback${kind ? ` is-${kind}` : ''}`;
+  }
+
+  function disableSoloOptions() {
+    [...el.soloOptions.children].forEach((button) => {
+      button.disabled = true;
+      button.classList.add('is-locked');
+    });
+  }
+
+  function enableSoloOptions() {
+    [...el.soloOptions.children].forEach((button) => {
+      button.disabled = false;
+      button.classList.remove('is-locked');
+    });
+  }
+
+  function updateSoloStats() {
+    const remaining = readWrongBook().words.length;
+    el.soloRemaining.textContent = String(remaining);
+    el.soloMastered.textContent = String(state.solo.mastered);
+    el.soloAnswered.textContent = String(state.solo.answered);
+  }
+
+  function updateSoloStreak(wordId, overrideStreak) {
+    const api = wrongBookApi();
+    const entry = api ? api.get(readWrongBook(), wordId) : null;
+    const streak =
+      typeof overrideStreak === 'number'
+        ? overrideStreak
+        : entry
+          ? entry.streak
+          : 0;
+
+    el.soloDots.replaceChildren();
+    for (let index = 0; index < 3; index += 1) {
+      const dot = document.createElement('span');
+      dot.className = `solo-dot${index < streak ? ' is-on' : ''}`;
+      el.soloDots.append(dot);
+    }
+    el.soloStreakValue.textContent = `${streak} / 3`;
+    el.soloStreakValue.classList.toggle('is-done', streak >= 3);
   }
 
   function startCountdown(deadline, serverNow) {

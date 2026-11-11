@@ -6,7 +6,7 @@ const crypto = require('crypto');
 const express = require('express');
 const compression = require('compression');
 const { Server } = require('socket.io');
-const { loadWords, buildQuestions } = require('./wordBank');
+const { loadWords, buildQuestions, buildQuestion } = require('./wordBank');
 const { APP_VERSION } = require('./version');
 
 const DEFAULT_CONFIG = {
@@ -28,6 +28,8 @@ const SESSION_MISSING = 'SESSION_MISSING';
 function createArenaServer(options = {}) {
   const config = { ...DEFAULT_CONFIG, ...options };
   const words = options.words || loadWords();
+  const wordById = new Map(words.map((entry) => [entry.id, entry]));
+  const wordByName = new Map(words.map((entry) => [entry.word.toLowerCase(), entry]));
   const app = express();
   const httpServer = http.createServer(app);
   const io = new Server(httpServer, {
@@ -708,6 +710,134 @@ function createArenaServer(options = {}) {
       });
     });
 
+    // ---------------------------------------------------------------
+    // 单人错词挑战：错词本存在浏览器 localStorage，服务端只按客户端
+    // 给定的词条 id 出题并判分，不保存任何学习进度。
+    // ---------------------------------------------------------------
+    const MAX_SOLO_WORDS = 300;
+
+    // 客户端错词本以「单词」为唯一键（结算复盘里没有 id 字段），
+    // 同时保留按 id 查词的能力，兼容旧调用。
+    function soloEntriesFrom(payload) {
+      const keys = Array.isArray(payload.words)
+        ? payload.words
+        : Array.isArray(payload.wordIds)
+          ? payload.wordIds
+          : [];
+      const seen = new Set();
+      const entries = [];
+      for (const key of keys) {
+        if (typeof key !== 'string') continue;
+        const normalized = key.trim().toLowerCase();
+        if (!normalized || seen.has(normalized)) continue;
+        const entry = wordByName.get(normalized) || wordById.get(key);
+        if (!entry) continue;
+        seen.add(normalized);
+        entries.push(entry);
+        if (entries.length >= MAX_SOLO_WORDS) break;
+      }
+      return entries;
+    }
+
+    // 与双人对战的 50% / 30% / 20% 题型配比保持一致。
+    function randomSoloType() {
+      const roll = crypto.randomInt(100);
+      if (roll < 50) return 'en2zh';
+      if (roll < 80) return 'zh2en';
+      return 'listen';
+    }
+
+    on('solo:start', (payload, ack) => {
+      const entries = soloEntriesFrom(payload);
+      if (!entries.length) {
+        ack({ ok: false, error: '错词本为空，先去打一局吧' });
+        return;
+      }
+      socket.data.solo = { entries, lastWordId: null, pending: null };
+      ack({ ok: true, total: entries.length });
+    });
+
+    on('solo:next', (payload, ack) => {
+      const solo = socket.data.solo;
+      if (!solo) {
+        ack({ ok: false, error: '请先开始错词挑战' });
+        return;
+      }
+      // 客户端每轮传回仍未被掌握的单词，已掌握的词自然退出抽题池。
+      const keepSource = Array.isArray(payload.words)
+        ? payload.words
+        : payload.wordIds;
+      if (Array.isArray(keepSource)) {
+        const keep = new Set(
+          keepSource
+            .filter((word) => typeof word === 'string')
+            .map((word) => word.trim().toLowerCase())
+        );
+        const filtered = solo.entries.filter((entry) =>
+          keep.has(entry.word.toLowerCase())
+        );
+        if (filtered.length) solo.entries = filtered;
+      }
+      if (!solo.entries.length) {
+        ack({ ok: false, error: '错词本已清空' });
+        return;
+      }
+
+      let candidates = solo.entries;
+      if (candidates.length > 1 && solo.lastWordId) {
+        const rest = candidates.filter((entry) => entry.id !== solo.lastWordId);
+        if (rest.length) candidates = rest;
+      }
+      const entry = candidates[crypto.randomInt(candidates.length)];
+      const question = buildQuestion(entry, words, randomSoloType());
+      solo.pending = question;
+      solo.lastWordId = entry.id;
+
+      ack({
+        ok: true,
+        question: {
+          id: question.id,
+          word: question.word,
+          level: question.level,
+          type: question.type,
+          prompt: question.prompt,
+          promptLabel: question.promptLabel,
+          options: question.options,
+        },
+      });
+    });
+
+    on('solo:answer', (payload, ack) => {
+      const solo = socket.data.solo;
+      const question = solo && solo.pending;
+      if (!question) {
+        ack({ ok: false, error: '没有待作答的题目' });
+        return;
+      }
+      const index = Number(payload.index);
+      if (!Number.isInteger(index) || index < 0 || index >= question.options.length) {
+        ack({ ok: false, error: '选项无效' });
+        return;
+      }
+      solo.pending = null;
+      ack({
+        ok: true,
+        correct: index === question.correctIndex,
+        id: question.id,
+        word: question.word,
+        type: question.type,
+        correctIndex: question.correctIndex,
+        correctText: question.correctText,
+        primary: question.primary,
+        meanings: question.meanings,
+      });
+    });
+
+    on('solo:quit', (payload, ack) => {
+      socket.data.solo = null;
+      ack({ ok: true });
+    });
+
     on('room:create', (payload, ack) => {
       if (socket.data.roomCode) {
         ack({ ok: false, error: '你已经在一个房间中' });
@@ -1024,6 +1154,16 @@ function createArenaServer(options = {}) {
       };
       room.lastActivityAt = Date.now();
 
+      // 听音选词答完后立刻展示中文释义，方便当场复盘。
+      const reveal =
+        question.type === 'listen'
+          ? {
+              word: question.word,
+              meanings: question.meanings,
+              primary: question.primary,
+            }
+          : null;
+
       if (correct) {
         player.score += 10;
         ack({
@@ -1032,6 +1172,8 @@ function createArenaServer(options = {}) {
           selectedIndex: optionIndex,
           score: player.score,
           locked: true,
+          correctIndex: question.correctIndex,
+          reveal,
         });
         endQuestion(room, 'correct', player.id);
         return;
@@ -1044,6 +1186,8 @@ function createArenaServer(options = {}) {
         selectedIndex: optionIndex,
         score: player.score,
         locked: true,
+        correctIndex: question.correctIndex,
+        reveal,
       });
       socket.to(room.code).emit('answer:update', {
         playerId: player.id,
@@ -1148,8 +1292,7 @@ function createArenaServer(options = {}) {
           total: game.questions.length,
           errors: state.errors,
           finished,
-        });
-        emitRaceProgress(room);
+        });        emitRaceProgress(room);
 
         if (finished) {
           finishRacePlayer(room, player);
@@ -1187,6 +1330,12 @@ function createArenaServer(options = {}) {
         lockedUntil: state.lockedUntil,
         penaltyMs: config.racePenaltyMs,
         serverNow: now,
+        correctIndex: question.correctIndex,
+        // 竞速答错会停留 1 秒冷却期，正好用来展示听音题的中文含义。
+        reveal:
+          question.type === 'listen'
+            ? { word: question.word, meanings: question.meanings, primary: question.primary }
+            : null,
       });
       socket.emit('race:locked', {
         selectedIndex: optionIndex,

@@ -220,61 +220,66 @@ function buildQuestions(words, count = 10, level = null) {
   const types = buildTypeSequence(count);
   return shuffle(pool)
     .slice(0, count)
-    .map((entry, index) => {
-      const primary = primaryMeaning(entry);
-      if (!primary) {
-        throw new Error(`${entry.word} 缺少最高频释义`);
-      }
-      const type = types[index];
-      const primaryText = formatMeaning(primary);
-      const otherEntries = pool.filter((candidate) => candidate.id !== entry.id);
-      const isZh2en = type === 'zh2en';
-      const isListen = type === 'listen';
-      const correctText = isZh2en || isListen ? entry.word : primaryText;
-      const prompt = isListen ? '' : isZh2en ? primaryText : entry.word;
-      const promptLabel = isListen
-        ? LISTEN_PROMPT_LABEL
-        : isZh2en
-          ? '选择正确的英文单词'
-          : '选择正确的中文释义';
+    .map((entry, index) => buildQuestion(entry, pool, types[index]));
+}
 
-      const rawDistractors =
-        isZh2en || isListen
-          ? otherEntries.map((candidate) => candidate.word)
-          : otherEntries
-              .map((candidate) => primaryMeaning(candidate))
-              .filter(Boolean)
-              .map((item) => formatMeaning(item));
-      const distractors = [...new Set(shuffle(rawDistractors))]
-        .filter((text) => text !== correctText)
-        .slice(0, 3);
-      if (distractors.length < 3) {
-        throw new Error(`${entry.word} 无法生成 3 个不同的干扰项`);
-      }
+/**
+ * 为指定词条生成一道题（干扰项从 pool 中取）。
+ * 单人错词挑战复用它，保证与双人对战完全相同的题型与选项规则。
+ */
+function buildQuestion(entry, pool, type) {
+  const primary = primaryMeaning(entry);
+  if (!primary) {
+    throw new Error(`${entry.word} 缺少最高频释义`);
+  }
+  const primaryText = formatMeaning(primary);
+  const otherEntries = pool.filter((candidate) => candidate.id !== entry.id);
+  const isZh2en = type === 'zh2en';
+  const isListen = type === 'listen';
+  const correctText = isZh2en || isListen ? entry.word : primaryText;
+  const prompt = isListen ? '' : isZh2en ? primaryText : entry.word;
+  const promptLabel = isListen
+    ? LISTEN_PROMPT_LABEL
+    : isZh2en
+      ? '选择正确的英文单词'
+      : '选择正确的中文释义';
 
-      const options = shuffle([correctText, ...distractors]);
-      const question = {
-        id: entry.id,
-        word: entry.word,
-        level: entry.level,
-        type,
-        prompt,
-        promptLabel,
-        meanings: entry.meanings,
-        primary: {
-          pos: primary.pos,
-          meaning: primary.meaning,
-          frequencyRank: primary.frequencyRank,
-          text: primaryText,
-        },
-        meaning: primary.meaning,
-        options,
-        correctIndex: options.indexOf(correctText),
-        correctText,
-      };
-      assertQuestionShape(question);
-      return question;
-    });
+  const rawDistractors =
+    isZh2en || isListen
+      ? otherEntries.map((candidate) => candidate.word)
+      : otherEntries
+          .map((candidate) => primaryMeaning(candidate))
+          .filter(Boolean)
+          .map((item) => formatMeaning(item));
+  const distractors = [...new Set(shuffle(rawDistractors))]
+    .filter((text) => text !== correctText)
+    .slice(0, 3);
+  if (distractors.length < 3) {
+    throw new Error(`${entry.word} 无法生成 3 个不同的干扰项`);
+  }
+
+  const options = shuffle([correctText, ...distractors]);
+  const question = {
+    id: entry.id,
+    word: entry.word,
+    level: entry.level,
+    type,
+    prompt,
+    promptLabel,
+    meanings: entry.meanings,
+    primary: {
+      pos: primary.pos,
+      meaning: primary.meaning,
+      frequencyRank: primary.frequencyRank,
+      text: primaryText,
+    },
+    meaning: primary.meaning,
+    options,
+    correctIndex: options.indexOf(correctText),
+    correctText,
+  };
+  assertQuestionShape(question);
+  return question;
 }
 
 module.exports = {
@@ -286,6 +291,7 @@ module.exports = {
   formatMeaning,
   buildTypeSequence,
   buildQuestions,
+  buildQuestion,
   assertQuestionShape,
 };
 

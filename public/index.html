@@ -9,7 +9,7 @@
       content="CET Arena：仅限两位好友通过 6 位房间码实时对战的四六级词汇竞技游戏。"
     />
     <title>CET Arena · 双人词汇对战</title>
-    <link rel="stylesheet" href="/styles.css?v=20261109-native1" />
+    <link rel="stylesheet" href="/styles.css?v=20261111-wrongbook3" />
   </head>
   <body data-view="loading">
     <div class="ambient ambient-one" aria-hidden="true"></div>
@@ -107,6 +107,19 @@
 
             <p class="hint" id="homeHint">好友打开同一网址，输入这个房间码即可加入。</p>
             <p class="error-text" id="homeError" role="alert" hidden></p>
+
+            <div class="divider"><span>或者一个人练</span></div>
+
+            <button class="btn btn-challenge" id="wrongChallengeBtn" type="button">
+              <span class="challenge-main">
+                <span class="challenge-title">错词挑战</span>
+                <small id="wrongBookHint" class="challenge-sub">错词本为空</small>
+              </span>
+              <span class="challenge-count" id="wrongBookCount" aria-label="错词数量">0</span>
+            </button>
+            <p class="hint" id="wrongBookTip">
+              只考你答错过的词，同一个词连续答对 3 次就移出错词本。
+            </p>
           </div>
         </div>
       </section>
@@ -202,6 +215,7 @@
             <button class="speak-btn" id="speakBtn" type="button" aria-label="播放发音" title="播放发音" hidden>🔊</button>
           </h2>
           <div class="options" id="options"></div>
+          <div class="answer-reveal" id="answerReveal" hidden aria-live="polite"></div>
           <div class="cooldown-hint" id="cooldownHint" hidden aria-live="polite">冷却中 1.0s</div>
           <div class="feedback" id="gameFeedback" role="status" aria-live="polite"></div>
         </div>
@@ -235,6 +249,61 @@
           <div class="review-list" id="reviewList"></div>
         </section>
       </section>
+      <section class="view solo-view" id="view-solo" aria-label="错词挑战" hidden>
+        <div class="solo-head">
+          <div>
+            <p class="eyebrow">WRONG-WORD CHALLENGE</p>
+            <h2>错词挑战</h2>
+          </div>
+          <button class="btn btn-small btn-ghost" id="soloExitBtn" type="button">
+            退出挑战
+          </button>
+        </div>
+
+        <div class="solo-stats" aria-live="polite">
+          <div class="solo-stat"><strong id="soloRemaining">0</strong><span>剩余错词</span></div>
+          <div class="solo-stat"><strong id="soloMastered">0</strong><span>本轮掌握</span></div>
+          <div class="solo-stat"><strong id="soloAnswered">0</strong><span>已答</span></div>
+        </div>
+
+        <div id="soloPlay">
+          <div class="solo-streak" id="soloStreak" aria-live="polite">
+            <span class="solo-streak-label">当前单词连对</span>
+            <span class="solo-dots" id="soloDots"></span>
+            <span class="solo-streak-value" id="soloStreakValue">0 / 3</span>
+          </div>
+
+          <div class="question-card">
+            <p class="question-prompt" id="soloPrompt">选择正确的中文释义</p>
+            <h2 class="question-word" id="soloQuestionWord">
+              <span class="question-word-text" id="soloWordText">Loading</span>
+              <button
+                class="speak-btn"
+                id="soloSpeakBtn"
+                type="button"
+                aria-label="播放发音"
+                title="播放发音"
+                hidden
+              >
+                🔊
+              </button>
+            </h2>
+            <div class="options" id="soloOptions"></div>
+            <div class="answer-reveal" id="soloReveal" hidden aria-live="polite"></div>
+            <div class="feedback" id="soloFeedback" role="status" aria-live="polite"></div>
+          </div>
+        </div>
+
+        <div class="solo-summary" id="soloSummary" hidden>
+          <p class="eyebrow">CHALLENGE COMPLETE</p>
+          <h3 id="soloSummaryTitle">挑战完成</h3>
+          <p class="solo-summary-copy" id="soloSummaryCopy"></p>
+          <div class="solo-summary-actions">
+            <button class="btn btn-primary" id="soloAgainBtn" type="button">再来一轮</button>
+            <button class="btn btn-ghost" id="soloHomeBtn" type="button">返回首页</button>
+          </div>
+        </div>
+      </section>
     </main>
 
     <footer class="footer">
@@ -248,6 +317,7 @@
     <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
 
     <script src="/socket.io/socket.io.min.js"></script>
-    <script src="/app.js?v=20261109-native1"></script>
+    <script src="/wrongbook.js?v=20261111-wrongbook3"></script>
+    <script src="/app.js?v=20261111-wrongbook3"></script>
   </body>
 </html>
