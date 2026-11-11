@@ -91,10 +91,15 @@ function createEnv(options = {}) {
   const timers = [];
   let timerId = 1;
 
+  const payButtons = [createElement('pay-wechat'), createElement('pay-alipay')];
+
   const document = {
     getElementById(id) {
       if (!elements.has(id)) elements.set(id, createElement(id));
       return elements.get(id);
+    },
+    querySelectorAll(selector) {
+      return String(selector).includes('data-pay') ? payButtons : [];
     },
     createElement(tag) {
       const node = createElement(`created-${tag}`);
@@ -265,6 +270,7 @@ function createEnv(options = {}) {
     fire(event, payload) {
       for (const fn of eventHandlers.get(event) || []) fn(payload);
     },
+    payButtons,
     spoken,
     el(id) {
       return document.getElementById(id);
@@ -521,7 +527,7 @@ async function scenarioMultiplayerListen() {
   const env = createEnv({
     speech: true,
     seedVip: '080323',
-    acks: { 'vip:verify': () => ({ ok: true, kind: 'unlimited' }) },
+    acks: { 'vip:verify': () => ({ ok: true, tier: 'super_admin' }) },
   });
   await flush();
   env.el('nickname').value = 'Tester';
@@ -636,10 +642,10 @@ async function scenarioSoloWrongColoring() {
 }
 
 async function scenarioVipPaywall() {
-  console.log('=== 场景 8：VIP 遮罩与激活流程 ===');
+  console.log('=== 场景 8：房主码 VIP 流程 ===');
   const env = createEnv({
     acks: {
-      'vip:verify': () => ({ ok: true, kind: 'once', message: '验证成功' }),
+      'vip:verify': () => ({ ok: true, tier: 'host', message: '验证成功' }),
       'room:create': () => ({
         ok: true,
         playerId: 'p1',
@@ -664,59 +670,79 @@ async function scenarioVipPaywall() {
   await flush();
 
   assert.equal(env.el('vipOverlay').hidden, false, '未激活时应弹出 VIP 遮罩');
-  assert.equal(env.el('vipStepCode').hidden, false, '默认显示激活码输入');
-  assert.equal(env.el('vipStepPay').hidden, true, '默认不显示支付页');
-  console.log('  ✓ 点「创建房间」弹出全屏 VIP 遮罩');
+  assert.equal(env.el('vipStepHost').hidden, false, '建房应显示房主通道');
+  assert.equal(env.el('vipStepPlayer').hidden, true, '建房不应显示单人通道');
+  assert.equal(env.el('vipStepPay').hidden, true, '默认不显示价格页');
+  console.log('  ✓ 点「创建房间」弹出房主通道遮罩');
 
-  env.el('vipToPayBtn')._fire('click');
-  assert.equal(env.el('vipStepPay').hidden, false, '应切到支付页');
-  assert.equal(env.el('vipStepCode').hidden, true);
-  console.log('  ✓ 点「点击支付」进入第二级（年度会员）');
+  env.el('vipHostPayBtn')._fire('click');
+  assert.equal(env.el('vipStepPay').hidden, false, '应切到价格页');
+  assert.equal(env.el('vipStepHost').hidden, true);
+  console.log('  ✓ 价格页包含房主 19.9 / 单人 9.9 两档');
 
-  env.el('vipWechatBtn')._fire('click');
+  env.payButtons[0]._fire('click');
   assert.equal(
     env.el('vipNotice').textContent,
     '支付通道维护中，请联系站长获取专属激活码。'
   );
   assert.equal(env.el('vipNotice').hidden, false, '应展示维护提示');
-  console.log('  ✓ 点「微信支付」只提示维护中，无收款码');
-
-  env.el('vipAlipayBtn')._fire('click');
-  assert.equal(env.el('vipNotice').hidden, false, '支付宝同样提示维护');
-  console.log('  ✓ 点「支付宝」同样只提示维护');
+  console.log('  ✓ 点支付只提示维护中，无收款码');
 
   env.el('vipBackBtn')._fire('click');
-  assert.equal(env.el('vipStepCode').hidden, false, '可返回输入激活码');
+  assert.equal(env.el('vipStepHost').hidden, false, '可返回房主通道');
 
-  env.el('vipCodeInput').value = 'VIP888';
-  env.el('vipVerifyBtn')._fire('click');
+  env.el('vipHostInput').value = 'HOST888';
+  env.el('vipHostVerifyBtn')._fire('click');
   await flush();
 
   assert.equal(env.el('vipOverlay').hidden, true, '验证成功后遮罩应关闭');
   const stored = JSON.parse(env.localStorage.getItem('cetArena.vip.v1'));
-  assert.equal(stored.code, 'VIP888', '应把激活码写入 localStorage');
+  assert.equal(stored.code, 'HOST888', '应写入激活码');
+  assert.equal(stored.tier, 'host', '应写入等级 host');
   assert.equal(env.document.body.dataset.view, 'room', '验证后应继续建房进入房间');
-  console.log('  ✓ 验证成功后关闭遮罩、写入 localStorage 并继续建房');
+  console.log('  ✓ 房主码验证成功，写入 tier=host 并继续建房');
 
-  // 清除激活状态：按钮出现 → 点击 → localStorage 清空、按钮隐藏
   assert.equal(env.el('vipClearBtn').hidden, false, '已激活时首页应显示清除按钮');
   env.el('vipClearBtn')._fire('click');
   await flush();
-  assert.equal(
-    env.localStorage.getItem('cetArena.vip.v1'),
-    null,
-    '点击清除后 localStorage 应被移除'
-  );
+  assert.equal(env.localStorage.getItem('cetArena.vip.v1'), null, '清除后应移除本地状态');
   assert.equal(env.el('vipClearBtn').hidden, true, '清除后按钮应隐藏');
   env.flushTimers();
-  console.log('  ✓ 清除激活状态按钮可用，清除后需重新输入激活码');
+  console.log('  ✓ 清除激活状态按钮可用');
+}
+
+async function scenarioPlayerCodeCannotHost() {
+  console.log('=== 场景 9：单人码不能建房 ===');
+  const env = createEnv({
+    acks: {
+      'vip:verify': () => ({ ok: true, tier: 'player', message: '验证成功' }),
+    },
+  });
+  await flush();
+
+  env.el('nickname').value = 'Tester';
+  env.el('createBtn')._fire('click');
+  await flush();
+  assert.equal(env.el('vipStepHost').hidden, false, '应显示房主通道');
+
+  env.el('vipHostInput').value = 'PLAY888';
+  env.el('vipHostVerifyBtn')._fire('click');
+  await flush();
+
+  assert.equal(env.el('vipOverlay').hidden, false, '单人码不能直接关掉遮罩');
+  assert(
+    env.el('vipHostError').textContent.includes('房主码'),
+    '应提示需要房主码'
+  );
+  assert.equal(env.el('vipHostError').hidden, false, '错误提示应可见');
+  console.log('  ✓ 单人码建房被拦下，并提示需要房主码');
 }
 
 async function scenarioResultStoresMistakes() {
   console.log('=== 场景 4：结算页答错的词自动入库 ===');
   const env = createEnv({
     seedVip: '080323',
-    acks: { 'vip:verify': () => ({ ok: true, kind: 'unlimited' }) },
+    acks: { 'vip:verify': () => ({ ok: true, tier: 'super_admin' }) },
   });
   await flush();
   env.el('nickname').value = 'Tester';
@@ -813,6 +839,7 @@ async function scenarioResultStoresMistakes() {
   await scenarioMultiplayerListen();
   await scenarioSoloWrongColoring();
   await scenarioVipPaywall();
+  await scenarioPlayerCodeCannotHost();
   await scenarioResultStoresMistakes();
   console.log('');
   console.log('错词挑战前端集成测试全部通过。');

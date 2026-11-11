@@ -7,7 +7,7 @@
     nickname: 'cetArena.nickname',
     vip: 'cetArena.vip.v1',
   };
-  const APP_VERSION = '20261111-vip2';
+  const APP_VERSION = '20261111-vip3';
 
   const VIEW_IDS = ['loading', 'home', 'room', 'game', 'result', 'solo'];
   const LETTERS = ['A', 'B', 'C', 'D'];
@@ -87,18 +87,22 @@
     reviewList: document.getElementById('reviewList'),
     reviewSummary: document.getElementById('reviewSummary'),
     vipOverlay: document.getElementById('vipOverlay'),
-    vipStepCode: document.getElementById('vipStepCode'),
+    vipStepHost: document.getElementById('vipStepHost'),
+    vipStepPlayer: document.getElementById('vipStepPlayer'),
     vipStepPay: document.getElementById('vipStepPay'),
-    vipCodeInput: document.getElementById('vipCodeInput'),
-    vipError: document.getElementById('vipError'),
-    vipVerifyBtn: document.getElementById('vipVerifyBtn'),
-    vipToPayBtn: document.getElementById('vipToPayBtn'),
-    vipBackBtn: document.getElementById('vipBackBtn'),
-    vipWechatBtn: document.getElementById('vipWechatBtn'),
-    vipAlipayBtn: document.getElementById('vipAlipayBtn'),
-    vipNotice: document.getElementById('vipNotice'),
-    vipCloseBtn: document.getElementById('vipCloseBtn'),
+    vipHostInput: document.getElementById('vipHostInput'),
+    vipHostError: document.getElementById('vipHostError'),
+    vipHostVerifyBtn: document.getElementById('vipHostVerifyBtn'),
+    vipHostPayBtn: document.getElementById('vipHostPayBtn'),
+    vipHostCloseBtn: document.getElementById('vipHostCloseBtn'),
+    vipPlayerInput: document.getElementById('vipPlayerInput'),
+    vipPlayerError: document.getElementById('vipPlayerError'),
+    vipPlayerVerifyBtn: document.getElementById('vipPlayerVerifyBtn'),
+    vipPlayerPayBtn: document.getElementById('vipPlayerPayBtn'),
+    vipPlayerCloseBtn: document.getElementById('vipPlayerCloseBtn'),
     vipPayCloseBtn: document.getElementById('vipPayCloseBtn'),
+    vipNotice: document.getElementById('vipNotice'),
+    vipBackBtn: document.getElementById('vipBackBtn'),
     vipClearBtn: document.getElementById('vipClearBtn'),
     toast: document.getElementById('toast'),
   };
@@ -157,6 +161,7 @@
     vip: {
       verified: false,
       code: '',
+      tier: null,
       pending: null,
     },
   };
@@ -175,7 +180,7 @@
     const vipPreview = new URLSearchParams(window.location.search).get('vip');
     if (vipPreview) {
       window.setTimeout(() => {
-        openVipModal(null);
+        openVipModal(vipPreview === 'join' ? 'join' : 'create');
         if (vipPreview === 'pay') showVipStep('pay');
       }, 0);
     }
@@ -183,7 +188,10 @@
     bindUiEvents();
     refreshWrongBookUi();
     const storedVip = readStoredVip();
-    if (storedVip) state.vip.code = storedVip.code;
+    if (storedVip) {
+      state.vip.code = storedVip.code;
+      state.vip.tier = storedVip.tier || null;
+    }
     updateVipUi();
     if (state.sessionId) {
       setView('loading');
@@ -223,17 +231,28 @@
     el.soloSpeakBtn.addEventListener('click', handleSpeakTrigger);
     el.soloSpeakBtn.addEventListener('touchend', handleSpeakTrigger);
 
-    // VIP 遮罩
-    el.vipVerifyBtn.addEventListener('click', submitVipCode);
-    el.vipCodeInput.addEventListener('keydown', (event) => {
-      if (event.key === 'Enter') submitVipCode();
-      if (event.key === 'Escape') closeVipModal();
+    // VIP 遮罩（房主通道 / 单人通道 / 价格）
+    el.vipHostVerifyBtn.addEventListener('click', () => submitVip('host'));
+    el.vipPlayerVerifyBtn.addEventListener('click', () => submitVip('player'));
+    for (const [input, step] of [
+      [el.vipHostInput, 'host'],
+      [el.vipPlayerInput, 'player'],
+    ]) {
+      input.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') submitVip(step);
+        if (event.key === 'Escape') closeVipModal();
+      });
+    }
+    el.vipHostPayBtn.addEventListener('click', () => showVipStep('pay'));
+    el.vipPlayerPayBtn.addEventListener('click', () => showVipStep('pay'));
+    el.vipBackBtn.addEventListener('click', () => {
+      showVipStep(state.vip.pending === 'join' ? 'player' : 'host');
     });
-    el.vipToPayBtn.addEventListener('click', () => showVipStep('pay'));
-    el.vipBackBtn.addEventListener('click', () => showVipStep('code'));
-    el.vipWechatBtn.addEventListener('click', showPayMaintenanceNotice);
-    el.vipAlipayBtn.addEventListener('click', showPayMaintenanceNotice);
-    el.vipCloseBtn.addEventListener('click', closeVipModal);
+    for (const button of document.querySelectorAll('[data-pay]')) {
+      button.addEventListener('click', showPayMaintenanceNotice);
+    }
+    el.vipHostCloseBtn.addEventListener('click', closeVipModal);
+    el.vipPlayerCloseBtn.addEventListener('click', closeVipModal);
     el.vipPayCloseBtn.addEventListener('click', closeVipModal);
     el.vipClearBtn.addEventListener('click', clearVipAndReload);
 
@@ -272,7 +291,9 @@
 
       // 本地存过激活码：连上后静默重验（同一 IP 视为同一设备）。
       if (state.vip.code && !state.vip.verified) {
-        verifyVipCode(state.vip.code, { silent: true });
+        verifyVipCode(state.vip.code).then((result) => {
+          if (!result.ok) clearVip();
+        });
       }
     });
 
@@ -470,7 +491,7 @@
   }
 
   // ---------------------------------------------------------------
-  // VIP 激活码（拟付费门面）
+  // VIP 激活码（拟付费门面）：房主码 host / 单人码 player
   // ---------------------------------------------------------------
   function readStoredVip() {
     const raw = storageGet(STORAGE.vip);
@@ -483,18 +504,20 @@
     }
   }
 
-  function persistVip(code) {
+  function persistVip(code, tier) {
     state.vip.code = code;
-    state.vip.verified = true;
+    state.vip.tier = tier || null;
+    state.vip.verified = Boolean(tier);
     storageSet(
       STORAGE.vip,
-      JSON.stringify({ code, verifiedAt: new Date().toISOString() })
+      JSON.stringify({ code, tier: tier || null, verifiedAt: new Date().toISOString() })
     );
     updateVipUi();
   }
 
   function clearVip() {
     state.vip.code = '';
+    state.vip.tier = null;
     state.vip.verified = false;
     try {
       window.localStorage.removeItem(STORAGE.vip);
@@ -510,6 +533,14 @@
     el.vipClearBtn.hidden = !state.vip.verified;
   }
 
+  function canHost() {
+    return state.vip.verified && (state.vip.tier === 'host' || state.vip.tier === 'super_admin');
+  }
+
+  function canJoin() {
+    return state.vip.verified && Boolean(state.vip.tier);
+  }
+
   function clearVipAndReload() {
     clearVip();
     showToast('已清除激活状态，下次需重新输入激活码', 'success');
@@ -518,34 +549,32 @@
 
   async function verifyVipCode(rawCode, options = {}) {
     const code = String(rawCode || '').trim().toUpperCase();
-    if (!code) {
-      if (!options.silent) showVipError('请输入激活码');
-      return false;
-    }
+    if (!code) return { ok: false, error: '请输入激活码' };
 
     const result = await request('vip:verify', { code }, 8000);
     if (!result.ok) {
-      if (options.silent) {
-        clearVip();
-        return false;
-      }
-      showVipError(result.error || '验证失败，请稍后重试');
-      return false;
+      return { ok: false, error: result.error || '验证失败，请稍后重试' };
     }
 
-    persistVip(code);
-    return true;
+    persistVip(code, result.tier);
+    return { ok: true, tier: result.tier };
   }
 
-  function openVipModal(pending) {
-    state.vip.pending = pending || null;
+  /**
+   * mode: 'create' 打开房主通道，'join' 打开单人通道。
+   */
+  function openVipModal(mode) {
+    state.vip.pending = mode === 'join' ? 'join' : 'create';
     el.vipOverlay.hidden = false;
-    showVipStep('code');
-    showVipError('');
-    el.vipCodeInput.value = '';
+    showVipStep(state.vip.pending === 'create' ? 'host' : 'player');
+    showVipError('host', '');
+    showVipError('player', '');
+    el.vipHostInput.value = '';
+    el.vipPlayerInput.value = '';
     document.body.classList.add('vip-open');
+    const input = state.vip.pending === 'create' ? el.vipHostInput : el.vipPlayerInput;
     window.setTimeout(() => {
-      if (!el.vipOverlay.hidden) el.vipCodeInput.focus();
+      if (!el.vipOverlay.hidden) input.focus();
     }, 60);
   }
 
@@ -556,37 +585,53 @@
   }
 
   function showVipStep(step) {
-    el.vipStepCode.hidden = step !== 'code';
+    el.vipStepHost.hidden = step !== 'host';
+    el.vipStepPlayer.hidden = step !== 'player';
     el.vipStepPay.hidden = step !== 'pay';
     el.vipNotice.hidden = true;
-    if (step === 'code') {
-      window.setTimeout(() => el.vipCodeInput.focus(), 40);
-    }
+    if (step === 'host') window.setTimeout(() => el.vipHostInput.focus(), 40);
+    if (step === 'player') window.setTimeout(() => el.vipPlayerInput.focus(), 40);
   }
 
-  function showVipError(message) {
-    el.vipError.textContent = message || '';
-    el.vipError.hidden = !message;
+  function showVipError(step, message) {
+    const node = step === 'host' ? el.vipHostError : el.vipPlayerError;
+    node.textContent = message || '';
+    node.hidden = !message;
   }
 
-  async function submitVipCode() {
-    const code = el.vipCodeInput.value;
+  async function submitVip(step) {
+    const isHost = step === 'host';
+    const input = isHost ? el.vipHostInput : el.vipPlayerInput;
+    const button = isHost ? el.vipHostVerifyBtn : el.vipPlayerVerifyBtn;
+    const code = input.value;
+
     if (!code.trim()) {
-      showVipError('请输入激活码');
-      el.vipCodeInput.focus();
+      showVipError(step, '请输入激活码');
+      input.focus();
       return;
     }
 
-    showVipError('');
-    setBusy(el.vipVerifyBtn, true, '验证中…');
-    const ok = await verifyVipCode(code);
-    setBusy(el.vipVerifyBtn, false);
-    if (!ok) return;
+    showVipError(step, '');
+    setBusy(button, true, '验证中…');
+    const result = await verifyVipCode(code);
+    setBusy(button, false);
+
+    if (!result.ok) {
+      showVipError(step, result.error || '验证失败，请重试');
+      return;
+    }
+
+    // 单人码不能建房：提示后保留已激活状态，用户可以直接去「加入房间」。
+    if (isHost && !canHost()) {
+      showVipError(step, '这是单人码，只能加入房间；创建房间需要房主码。');
+      return;
+    }
 
     const pending = state.vip.pending;
     closeVipModal();
     showToast('激活成功，欢迎回来', 'success');
     if (pending === 'create') createRoom();
+    else if (pending === 'join') joinRoom();
   }
 
   function showPayMaintenanceNotice() {
@@ -601,8 +646,8 @@
     const nickname = getNickname();
     if (!validateNickname(nickname)) return;
 
-    // 未激活：先去 VIP 通道，验证成功后再回到这里继续建房。
-    if (!state.vip.verified) {
+    // 未激活或只有单人码：房主通道
+    if (!canHost()) {
       openVipModal('create');
       return;
     }
@@ -612,8 +657,8 @@
     setBusy(el.createBtn, false);
 
     if (!result.ok) {
-      if (result.code === 'VIP_REQUIRED') {
-        state.vip.verified = false;
+      if (result.code === 'VIP_REQUIRED' || result.code === 'VIP_TIER') {
+        if (result.code === 'VIP_TIER') showToast(result.error, 'error');
         openVipModal('create');
         return;
       }
@@ -639,11 +684,21 @@
       return;
     }
 
+    // 加入房间需要激活码（单人码或房主码都可以）
+    if (!canJoin()) {
+      openVipModal('join');
+      return;
+    }
+
     setBusy(el.joinBtn, true, '加入中…');
     const result = await request('room:join', { nickname, code }, 10000);
     setBusy(el.joinBtn, false);
 
     if (!result.ok) {
+      if (result.code === 'VIP_REQUIRED') {
+        openVipModal('join');
+        return;
+      }
       showHomeError(result.error || '加入房间失败，请重试');
       return;
     }

@@ -2561,3 +2561,31 @@ a:focus-visible {
 .link-quiet:hover {
   color: var(--danger);
 }
+
+.vip-tier {
+  margin-bottom: 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.vip-tier-head {
+  display: flex;
+  margin-bottom: 4px;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.vip-tier-head strong {
+  font-size: 15px;
+  letter-spacing: 0.01em;
+}
+
+.vip-tier-desc {
+  margin: 0 0 12px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}

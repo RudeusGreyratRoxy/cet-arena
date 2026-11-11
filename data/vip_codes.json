@@ -1,30 +1,38 @@
 {
-  "version": 1,
-  "note": "种子卡密（入库）。运行状态写入 data/vip_codes.state.json，不入库。",
+  "version": 2,
+  "note": "种子卡密（入库）。type: super_admin=不限次/不绑IP；host=房主码；player=单人码。运行状态写入 data/vip_codes.state.json，不入库。",
   "codes": {
     "BOSS888": {
-      "type": "unlimited",
+      "type": "super_admin",
       "label": "站长"
     },
     "080323": {
-      "type": "unlimited",
+      "type": "super_admin",
       "label": "专属永久"
     },
+    "HOST888": {
+      "type": "host",
+      "label": "房主码 · 早鸟"
+    },
+    "HOST666": {
+      "type": "host",
+      "label": "房主码 · 标准"
+    },
     "VIP888": {
-      "type": "once",
-      "label": "早鸟单人码"
+      "type": "host",
+      "label": "房主码 · 老用户"
     },
-    "VIP666": {
-      "type": "once",
-      "label": "会员单人码"
+    "PLAY888": {
+      "type": "player",
+      "label": "单人码 · 早鸟"
     },
-    "CET4VIP": {
-      "type": "once",
-      "label": "四级专享码"
+    "PLAY666": {
+      "type": "player",
+      "label": "单人码 · 标准"
     },
-    "ARENA2026": {
-      "type": "once",
-      "label": "年度活动码"
+    "CET4PLAY": {
+      "type": "player",
+      "label": "单人码 · 四级专享"
     }
   }
 }
