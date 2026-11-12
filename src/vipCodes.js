@@ -4,10 +4,14 @@
  * 激活码（VIP）校验。
  *
  * 只有两类：
- * - unlimited：站长/专属码，不限次数、不绑定 IP；
- * - once：普通单人码。一码一用，首次验证成功后标记 used 并绑定 IP；
- *   同一 IP 再次验证视为同一设备，允许（用于刷新后静默恢复）；
- *   换 IP 一律拒绝「该卡密已绑定其他设备」。
+ * - unlimited：站长/专属码，不限次数、不绑定任何设备；
+ * - once：普通单人码。一码一用，首次验证成功后标记 used 并绑定**设备 Token**；
+ *   同一设备再次验证视为同一台机器，允许（用于刷新后静默恢复）；
+ *   换设备一律拒绝「该卡密已绑定其他设备」。
+ *
+ * 为什么不用 IP 绑定：大学校园网普遍是 NAT，全校共用一个公网 IP，
+ * 按 IP 绑定等于「一人买码、全校白嫖」。因此绑定主体改为前端生成的随机
+ * device_token（存 localStorage），IP 只作为风控参考记录，不参与放行判断。
  *
  * 验证通过后权限一致：该玩家既能建房，也能加入他人房间。
  *
@@ -27,6 +31,11 @@ const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const CODE_LENGTH = 6;
 const MAX_GENERATE = 100;
 
+// 设备 Token：前端随机生成，长度与字符集都做限制，避免塞入任意脏数据。
+const DEVICE_TOKEN_MIN = 16;
+const DEVICE_TOKEN_MAX = 128;
+const DEVICE_TOKEN_PATTERN = /^[A-Za-z0-9_-]+$/;
+
 function readJson(file, fallback) {
   try {
     return JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -45,6 +54,20 @@ function writeJsonAtomic(file, value) {
 
 function normalizeCode(raw) {
   return String(raw == null ? '' : raw).trim().toUpperCase();
+}
+
+/** 设备 Token 规范化：空白、过短、过长、含非法字符一律视为无效。 */
+function normalizeDeviceToken(raw) {
+  const token = String(raw == null ? '' : raw).trim();
+  if (token.length < DEVICE_TOKEN_MIN || token.length > DEVICE_TOKEN_MAX) return '';
+  if (!DEVICE_TOKEN_PATTERN.test(token)) return '';
+  return token;
+}
+
+/** 只对外暴露前 8 位，后台列表据此人工核对设备。 */
+function devicePrefix(token) {
+  if (!token) return null;
+  return String(token).slice(0, 8);
 }
 
 /** 兼容旧数据：任何非 unlimited 的类型都视为普通单人码。 */
@@ -83,15 +106,21 @@ function createVipStore(options = {}) {
       kind: type,
       label: def.label || '',
       status: type === 'unlimited' ? 'unlimited' : (record && record.status) || 'available',
+      // 绑定主体是设备 Token；只回传前 8 位，够后台人工核对，又不把完整凭据散出去。
+      boundDevicePrefix: record ? devicePrefix(record.boundDevice) : null,
       boundIp: record ? record.boundIp || null : null,
+      lastIp: record ? record.lastIp || null : null,
       usedAt: record ? record.usedAt || null : null,
     };
   }
 
   /**
+   * @param {string} rawCode 激活码
+   * @param {string} ip 请求来源 IP（风控参考，不参与放行判断）
+   * @param {string} rawDevice 前端生成并持久化的设备 Token
    * @returns {{ok: boolean, kind?: string, code?: string, message: string}}
    */
-  function verify(rawCode, ip) {
+  function verify(rawCode, ip, rawDevice) {
     const code = normalizeCode(rawCode);
     if (!code) {
       return { ok: false, code: 'EMPTY', message: '请输入激活码' };
@@ -105,6 +134,16 @@ function createVipStore(options = {}) {
       return { ok: true, kind: 'unlimited', message: '验证成功' };
     }
 
+    // 普通码必须带设备 Token，否则无法判断是不是同一台机器。
+    const device = normalizeDeviceToken(rawDevice);
+    if (!device) {
+      return {
+        ok: false,
+        code: 'DEVICE_REQUIRED',
+        message: '设备标识缺失，请刷新页面后重试',
+      };
+    }
+
     if (inFlight.has(code)) {
       return { ok: false, code: 'BUSY', message: '该激活码正在验证中，请稍后重试' };
     }
@@ -112,16 +151,35 @@ function createVipStore(options = {}) {
     try {
       const record = state[code];
       if (record && record.status === 'used') {
-        if (record.boundIp && record.boundIp !== ip) {
+        // 老数据只有 boundIp、没有 boundDevice：同 IP 首次带 Token 请求时补迁移。
+        if (!record.boundDevice) {
+          if (record.boundIp && record.boundIp !== ip) {
+            return { ok: false, code: 'BOUND', message: '该卡密已绑定其他设备' };
+          }
+          record.boundDevice = device;
+          record.lastIp = ip || record.boundIp || null;
+          writeJsonAtomic(statePath, state);
+          return { ok: true, kind: 'once', reused: true, migrated: true, message: '验证成功' };
+        }
+
+        if (record.boundDevice !== device) {
           return { ok: false, code: 'BOUND', message: '该卡密已绑定其他设备' };
+        }
+
+        // 同一台设备换网络（宿舍 Wi-Fi ↔ 手机热点）应当放行，只更新风控 IP。
+        if (ip && record.lastIp !== ip) {
+          record.lastIp = ip;
+          writeJsonAtomic(statePath, state);
         }
         return { ok: true, kind: 'once', reused: true, message: '验证成功' };
       }
 
-      // 首次使用：同步完成「标记 + 绑定 + 持久化」
+      // 首次使用：同步完成「标记 + 绑定设备 + 记录 IP + 持久化」
       state[code] = {
         status: 'used',
+        boundDevice: device,
         boundIp: ip || null,
+        lastIp: ip || null,
         usedAt: now().toISOString(),
       };
       writeJsonAtomic(statePath, state);
@@ -208,4 +266,4 @@ function createVipStore(options = {}) {
   return { verify, list, describe, reset, generate, stats, seedPath, statePath };
 }
 
-module.exports = { createVipStore, normalizeCode, normalizeType };
+module.exports = { createVipStore, normalizeCode, normalizeType, normalizeDeviceToken };

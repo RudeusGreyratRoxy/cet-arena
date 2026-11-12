@@ -1070,10 +1070,13 @@ function createArenaServer(options = {}) {
 
     on('vip:verify', (payload, ack) => {
       const ip = clientIp(socket);
-      const result = vip.verify(payload.code, ip);
+      const deviceToken = payload && payload.deviceToken;
+      const result = vip.verify(payload.code, ip, deviceToken);
       audit('vip_verify', {
         ip,
         code: String(payload.code == null ? '' : payload.code).slice(0, 24),
+        // 只记录设备 Token 前 8 位，便于排查「疑似共享」又不落完整凭据。
+        device: deviceToken ? String(deviceToken).slice(0, 8) : null,
         ok: result.ok,
         tier: result.tier || null,
         reason: result.code || null,

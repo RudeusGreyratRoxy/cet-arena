@@ -6,8 +6,9 @@
     room: 'cetArena.roomCode',
     nickname: 'cetArena.nickname',
     vip: 'cetArena.vip.v1',
+    device: 'cetArena.deviceToken.v1',
   };
-  const APP_VERSION = '20261111-vip4';
+  const APP_VERSION = '20261112-vip5';
 
   const VIEW_IDS = ['loading', 'home', 'room', 'game', 'result', 'solo'];
   const LETTERS = ['A', 'B', 'C', 'D'];
@@ -180,6 +181,8 @@
 
     bindUiEvents();
     refreshWrongBookUi();
+    // 首次打开页面即生成设备 Token，之后所有验证都复用它。
+    deviceToken();
     const storedVip = readStoredVip();
     if (storedVip) {
       state.vip.code = storedVip.code;
@@ -271,7 +274,7 @@
         setView('home');
       }
 
-      // 本地存过激活码：连上后静默重验（同一 IP 视为同一设备）。
+      // 本地存过激活码：连上后静默重验（同一 device_token 视为同一台设备）。
       if (state.vip.code && !state.vip.verified) {
         verifyVipCode(state.vip.code).then((result) => {
           if (!result.ok) clearVip();
@@ -475,6 +478,39 @@
   // ---------------------------------------------------------------
   // VIP 激活码（拟付费门面）：一种码，验证通过即可建房/加入
   // ---------------------------------------------------------------
+  // 设备 Token：首次打开页面时生成并写入 localStorage，之后一直复用。
+  // 卡密绑定的是这个 Token，而不是 IP —— 校园网 NAT 下全校共用一个公网 IP，
+  // 按 IP 绑定会导致「一人买码、全校白嫖」。
+  function randomDeviceToken() {
+    try {
+      if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+        return window.crypto.randomUUID().replace(/-/g, '');
+      }
+      if (window.crypto && typeof window.crypto.getRandomValues === 'function') {
+        const bytes = new Uint8Array(16);
+        window.crypto.getRandomValues(bytes);
+        return Array.prototype.map
+          .call(bytes, (b) => b.toString(16).padStart(2, '0'))
+          .join('');
+      }
+    } catch (error) {
+      /* 极端环境回退到 Math.random */
+    }
+    let token = '';
+    for (let i = 0; i < 32; i += 1) {
+      token += Math.floor(Math.random() * 16).toString(16);
+    }
+    return token;
+  }
+
+  function deviceToken() {
+    const stored = storageGet(STORAGE.device);
+    if (stored && /^[A-Za-z0-9_-]{16,128}$/.test(stored)) return stored;
+    const token = randomDeviceToken();
+    storageSet(STORAGE.device, token);
+    return token;
+  }
+
   function readStoredVip() {
     const raw = storageGet(STORAGE.vip);
     if (!raw) return null;
@@ -523,7 +559,7 @@
     const code = String(rawCode || '').trim().toUpperCase();
     if (!code) return { ok: false, error: '请输入激活码' };
 
-    const result = await request('vip:verify', { code }, 8000);
+    const result = await request('vip:verify', { code, deviceToken: deviceToken() }, 8000);
     if (!result.ok) {
       return { ok: false, error: result.error || '验证失败，请稍后重试' };
     }

@@ -36,6 +36,10 @@ const ok = (label, condition) => {
   console.log('  ✓ ' + label);
 };
 
+// 模拟两台不同设备的 device_token（32 位十六进制）
+const DEVICE_X = 'cafebabecafebabecafebabecafebabe';
+const DEVICE_Y = '0123456789abcdef0123456789abcdef';
+
 function readSeed() {
   return JSON.parse(fs.readFileSync(seedPath, 'utf8'));
 }
@@ -134,11 +138,11 @@ async function main() {
     ok('生成后总数变为 8', gen.data.stats.total === 8);
 
     const fresh = gen.data.created[0];
-    const freshVerify = arena.vip.verify(fresh, '198.51.100.7');
+    const freshVerify = arena.vip.verify(fresh, '198.51.100.7', DEVICE_X);
     ok('新卡密无需重启即可验证通过', freshVerify.ok === true && freshVerify.firstUse === true);
 
     const reloaded = createVipStore({ seedPath, statePath });
-    ok('重启后新卡密仍在（已持久化）', reloaded.verify(gen.data.created[1], '198.51.100.8').ok === true);
+    ok('重启后新卡密仍在（已持久化）', reloaded.verify(gen.data.created[1], '198.51.100.8', DEVICE_Y).ok === true);
 
     const tooMany = await http('POST', '/api/admin/codes/generate', { body: { count: 101 } });
     ok('超过 100 张被拒', tooMany.status === 400 && tooMany.data.code === 'TOO_MANY');
@@ -146,22 +150,26 @@ async function main() {
     ok('数量 0 被拒', zero.status === 400 && zero.data.code === 'BAD_COUNT');
 
     console.log('=== 5. 解绑 / 重置 ===');
-    arena.vip.verify('VIP888', '10.9.9.1');
-    ok('VIP888 已绑定 10.9.9.1', readState().VIP888.boundIp === '10.9.9.1');
+    arena.vip.verify('VIP888', '10.9.9.1', DEVICE_X);
+    ok('VIP888 已绑定设备与 IP', readState().VIP888.boundDevice === DEVICE_X && readState().VIP888.boundIp === '10.9.9.1');
 
     const beforeReset = await http('GET', '/api/admin/state');
     const boundItem = beforeReset.data.codes.find((item) => item.code === 'VIP888');
     ok('列表中显示已绑定状态', boundItem.status === 'used' && boundItem.boundIp === '10.9.9.1');
+    ok('列表显示设备 Token 前 8 位', boundItem.boundDevicePrefix === DEVICE_X.slice(0, 8));
+    ok('列表不泄露完整设备 Token', !JSON.stringify(beforeReset.data).includes(DEVICE_X));
 
     const reset = await http('POST', '/api/admin/codes/reset', { body: { code: 'VIP888' } });
     ok('解绑成功', reset.status === 200 && reset.data.ok === true);
     ok('解绑后状态回到 available', reset.data.code.status === 'available');
+    ok('解绑后设备 Token 已清空', reset.data.code.boundDevicePrefix === null);
+    ok('解绑后 IP 已清空', reset.data.code.boundIp === null);
     ok('state 文件已清除该卡密', !readState().VIP888);
     ok('统计已绑定数减少', reset.data.stats.used === 1); // fresh 仍在
 
-    const afterReset = arena.vip.verify('VIP888', '10.9.9.2');
-    ok('解绑后可在新 IP 重新激活', afterReset.ok === true && afterReset.firstUse === true);
-    ok('重新激活后绑定到新 IP', readState().VIP888.boundIp === '10.9.9.2');
+    const afterReset = arena.vip.verify('VIP888', '10.9.9.2', DEVICE_Y);
+    ok('解绑后可在新设备重新激活', afterReset.ok === true && afterReset.firstUse === true);
+    ok('重新激活后绑定到新设备', readState().VIP888.boundDevice === DEVICE_Y);
 
     const badReset = await http('POST', '/api/admin/codes/reset', { body: { code: 'NOSUCH' } });
     ok('解绑不存在的卡密被拒', badReset.status === 400 && badReset.data.code === 'INVALID');

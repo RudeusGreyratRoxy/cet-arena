@@ -483,6 +483,7 @@ tr.row-used td {
 
   /* 未绑定的卡密在手机上只显示「卡密 / 类型 / 状态」三行，避免卡片过长。 */
   .codes tr.no-bind td[data-label="绑定 IP"],
+  .codes tr.no-bind td[data-label="绑定设备"],
   .codes tr.no-bind td[data-label="绑定时间"],
   .codes tr.no-bind td[data-label="操作"] {
     display: none;

@@ -204,6 +204,10 @@
 
     tr.appendChild(makeCell('状态', textSpan(status.text, `tag ${status.cls}`)));
     tr.appendChild(makeCell('绑定 IP', textSpan(item.boundIp || '—', 'mono')));
+    const deviceText = item.boundDevicePrefix ? `${item.boundDevicePrefix}…` : '—';
+    const deviceSpan = textSpan(deviceText, item.boundDevicePrefix ? 'mono device' : 'mono');
+    if (item.boundDevicePrefix) deviceSpan.title = '设备 Token 前 8 位';
+    tr.appendChild(makeCell('绑定设备', deviceSpan));
     tr.appendChild(makeCell('绑定时间', textSpan(formatTime(item.usedAt), 'mono')));
 
     const actionCell = makeCell('操作', '—');
