@@ -7,7 +7,7 @@ const express = require('express');
 const compression = require('compression');
 const { Server } = require('socket.io');
 const { loadWords, buildQuestions, buildQuestion } = require('./wordBank');
-const { createVipStore } = require('./vipCodes');
+const { createVipStore, normalizeDeviceToken } = require('./vipCodes');
 const { createAdminAuth } = require('./adminAuth');
 const { createMessageStore, MAX_CONTENT } = require('./messages');
 const { createAnnouncementStore } = require('./announcement');
@@ -266,7 +266,36 @@ function createArenaServer(options = {}) {
       res.status(400).json(result);
       return;
     }
-    res.json({ ok: true, message: result.message, code: result.record, stats: vip.stats() });
+
+    // 在线踢人：把该设备所有在线连接降级为普通用户（不强制断开、不打断当前对局），
+    // 只发通知 + 清 socket.data.vip，下一次需要 VIP 权限的操作会被拦截。
+    let kicked = 0;
+    if (result.previousDevice) {
+      for (const client of io.sockets.sockets.values()) {
+        if (client.data && client.data.deviceToken === result.previousDevice) {
+          client.data.vip = false;
+          client.data.vipCode = null;
+          client.emit('vip:revoked', {
+            message: '您的 VIP 授权已被站长撤销，请重新获取激活码',
+          });
+          kicked += 1;
+        }
+      }
+      audit('vip_revoked', {
+        ip: httpIp(req),
+        code: String(body.code || '').toUpperCase(),
+        device: String(result.previousDevice).slice(0, 8),
+        kicked,
+      });
+    }
+
+    res.json({
+      ok: true,
+      message: result.message,
+      code: result.record,
+      stats: vip.stats(),
+      kicked,
+    });
   });
 
   app.post('/api/admin/codes/generate', requireAdmin, (req, res) => {
@@ -1390,7 +1419,10 @@ function createArenaServer(options = {}) {
     on('vip:verify', (payload, ack) => {
       const ip = clientIp(socket);
       const deviceToken = payload && payload.deviceToken;
-      const result = vip.verify(payload.code, ip, deviceToken);
+      // silent=true 是前端「刷新/重连自动重验」，服务端在该模式下不允许首次绑定，
+      // 避免解绑后本地残留的码被静默绑回原设备。
+      const silent = Boolean(payload && payload.silent);
+      const result = vip.verify(payload.code, ip, deviceToken, { silent });
       audit('vip_verify', {
         ip,
         code: maskCode(payload && payload.code),
@@ -1398,6 +1430,7 @@ function createArenaServer(options = {}) {
         device: deviceToken ? String(deviceToken).slice(0, 8) : null,
         ok: result.ok,
         tier: result.tier || null,
+        silent,
         reason: result.code || null,
       });
 
@@ -1406,7 +1439,19 @@ function createArenaServer(options = {}) {
         return;
       }
       socket.data.vip = true;
+      // 记住这台连接对应哪台设备，后台解绑时才能精准踢线。
+      socket.data.deviceToken = normalizeDeviceToken(deviceToken);
+      socket.data.vipCode = String(payload.code || '').trim().toUpperCase();
       ack({ ok: true, kind: result.kind, message: result.message });
+    });
+
+    // 按设备查授权：前端 init 时的权威判定（不依赖本地缓存）。
+    on('vip:status', (payload, ack) => {
+      const status = vip.statusByDevice(
+        payload && payload.deviceToken,
+        payload && payload.code
+      );
+      ack({ ok: true, vip: Boolean(status.vip), kind: status.kind || null });
     });
 
     // 联系站长：公开留言入口（按 device_token 限流，不需要激活码）

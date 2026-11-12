@@ -179,6 +179,7 @@
   function statusOf(item) {
     if (item.kind === 'unlimited') return { text: '永久可用', cls: 'free', used: false };
     if (item.status === 'used') return { text: '已绑定', cls: 'used', used: true };
+    if (item.status === 'revoked') return { text: '已解绑（原设备失效）', cls: 'free', used: false };
     return { text: '未使用', cls: 'free', used: false };
   }
 
@@ -641,7 +642,7 @@
   async function handleReset(code) {
     if (!code || state.busy) return;
     const confirmed = window.confirm(
-      `确定要解绑卡密「${code}」吗？\n\n解绑后它会变回「未使用」，可以在新设备上重新激活；原设备将失去授权。`
+      `确定要解绑卡密「${code}」吗？\n\n解绑后该卡密可以在新设备上重新激活；原设备将立即失去授权，即使刷新页面也无法恢复。`
     );
     if (!confirmed) return;
 

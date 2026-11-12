@@ -153,7 +153,35 @@ function createVipStore(options = {}) {
       boundIp: record ? record.boundIp || null : null,
       lastIp: record ? record.lastIp || null : null,
       usedAt: record ? record.usedAt || null : null,
+      revokedAt: record ? record.revokedAt || null : null,
     };
+  }
+
+  /**
+   * 按设备查授权（供前端 init 做权威判定）：
+   * 1) 本地带过来的码如果是 unlimited 且有效 → 直接 VIP（专属码不绑设备）；
+   * 2) 否则扫描 state，找「status=used 且 boundDevice=本设备」的卡密。
+   * 不返回完整卡密，避免泄露用户未必知道的码。
+   */
+  function statusByDevice(rawDevice, rawCodeHint) {
+    const device = normalizeDeviceToken(rawDevice);
+    const codeHint = normalizeCode(rawCodeHint);
+    if (codeHint && has(codeHint) && normalizeType(codes[codeHint].type) === 'unlimited') {
+      return { vip: true, kind: 'unlimited' };
+    }
+    if (!device) return { vip: false, kind: null };
+
+    const boundCode = Object.keys(state).find((key) => {
+      const record = state[key];
+      return (
+        record &&
+        record.status === 'used' &&
+        record.boundDevice === device &&
+        has(key)
+      );
+    });
+    if (!boundCode) return { vip: false, kind: null };
+    return { vip: true, kind: normalizeType(codes[boundCode].type) };
   }
 
   /**
@@ -162,7 +190,10 @@ function createVipStore(options = {}) {
    * @param {string} rawDevice 前端生成并持久化的设备 Token
    * @returns {{ok: boolean, kind?: string, code?: string, message: string}}
    */
-  function verify(rawCode, ip, rawDevice) {
+  function verify(rawCode, ip, rawDevice, options = {}) {
+    // silent：前端「刷新/重连自动重验」专用。该模式下**绝不允许首次绑定**，
+    // 否则「解绑后本地残留的码」会被静默重新绑回原设备（白嫖漏洞）。
+    const silent = Boolean(options.silent);
     const code = normalizeCode(rawCode);
     if (!code) {
       return { ok: false, code: 'EMPTY', message: '请输入激活码' };
@@ -192,40 +223,90 @@ function createVipStore(options = {}) {
     inFlight.add(code);
     try {
       const record = state[code];
-      if (record && record.status === 'used') {
-        // 老数据只有 boundIp、没有 boundDevice：同 IP 首次带 Token 请求时补迁移。
-        if (!record.boundDevice) {
-          if (record.boundIp && record.boundIp !== ip) {
-            return { ok: false, code: 'BOUND', message: '该卡密已绑定其他设备' };
-          }
-          record.boundDevice = device;
-          record.lastIp = ip || record.boundIp || null;
-          writeJsonAtomic(statePath, state);
-          return { ok: true, kind: 'once', reused: true, migrated: true, message: '验证成功' };
-        }
 
-        if (record.boundDevice !== device) {
-          return { ok: false, code: 'BOUND', message: '该卡密已绑定其他设备' };
-        }
-
-        // 同一台设备换网络（宿舍 Wi-Fi ↔ 手机热点）应当放行，只更新风控 IP。
-        if (ip && record.lastIp !== ip) {
-          record.lastIp = ip;
-          writeJsonAtomic(statePath, state);
-        }
-        return { ok: true, kind: 'once', reused: true, message: '验证成功' };
+      // 被站长解绑过的设备永久失效（跨多轮解绑依然有效）。
+      if (
+        record &&
+        Array.isArray(record.revokedDevices) &&
+        record.revokedDevices.includes(device)
+      ) {
+        return {
+          ok: false,
+          code: 'REVOKED',
+          message: '该卡密已被站长解绑，此设备无法继续使用，请联系站长重新获取',
+        };
       }
 
-      // 首次使用：同步完成「标记 + 绑定设备 + 记录 IP + 持久化」
-      state[code] = {
-        status: 'used',
-        boundDevice: device,
-        boundIp: ip || null,
-        lastIp: ip || null,
-        usedAt: now().toISOString(),
-      };
-      writeJsonAtomic(statePath, state);
-      return { ok: true, kind: 'once', firstUse: true, message: '验证成功' };
+      // 没有任何记录：全新卡密。silent 模式不允许自动绑定。
+      if (!record) {
+        if (silent) {
+          return {
+            ok: false,
+            code: 'SILENT_UNBOUND',
+            message: '需要重新输入激活码',
+          };
+        }
+        state[code] = {
+          status: 'used',
+          boundDevice: device,
+          boundIp: ip || null,
+          lastIp: ip || null,
+          usedAt: now().toISOString(),
+        };
+        writeJsonAtomic(statePath, state);
+        return { ok: true, kind: 'once', firstUse: true, message: '验证成功' };
+      }
+
+      // 已解绑：原设备在上面的 revokedDevices 已拦截；其余设备视为「换机」，允许重新激活。
+      if (record.status === 'revoked') {
+        if (silent) {
+          return {
+            ok: false,
+            code: 'REVOKED',
+            message: '该卡密已被站长解绑，请重新输入激活码',
+          };
+        }
+        state[code] = {
+          status: 'used',
+          boundDevice: device,
+          boundIp: ip || null,
+          lastIp: ip || null,
+          usedAt: now().toISOString(),
+          revokedDevices: Array.isArray(record.revokedDevices)
+            ? record.revokedDevices.slice()
+            : [],
+        };
+        writeJsonAtomic(statePath, state);
+        return {
+          ok: true,
+          kind: 'once',
+          rebind: true,
+          message: '验证成功，已在新设备激活',
+        };
+      }
+
+      // 老数据：有记录但没有 boundDevice（早期只绑过 IP），同 IP 首次带 Token 时补迁移。
+      if (!record.boundDevice) {
+        if (record.boundIp && record.boundIp !== ip) {
+          return { ok: false, code: 'BOUND', message: '该卡密已绑定其他设备' };
+        }
+        record.status = 'used';
+        record.boundDevice = device;
+        record.lastIp = ip || record.boundIp || null;
+        writeJsonAtomic(statePath, state);
+        return { ok: true, kind: 'once', reused: true, migrated: true, message: '验证成功' };
+      }
+
+      if (record.boundDevice !== device) {
+        return { ok: false, code: 'BOUND', message: '该卡密已绑定其他设备' };
+      }
+
+      // 同一台设备换网络（宿舍 Wi-Fi ↔ 手机热点）应当放行，只更新风控 IP。
+      if (ip && record.lastIp !== ip) {
+        record.lastIp = ip;
+        writeJsonAtomic(statePath, state);
+      }
+      return { ok: true, kind: 'once', reused: true, message: '验证成功' };
     } finally {
       inFlight.delete(code);
     }
@@ -259,13 +340,40 @@ function createVipStore(options = {}) {
     if (normalizeType(codes[code].type) === 'unlimited') {
       return { ok: false, code: 'UNLIMITED', message: '站长码不绑定设备，无需解绑' };
     }
-    if (!state[code]) {
+    const current = state[code];
+    if (!current) {
       return { ok: false, code: 'NOT_BOUND', message: '该卡密尚未使用，无需解绑' };
     }
 
-    delete state[code];
+    // 解绑 = 「撤销授权」，不是「删记录」：
+    // 记住被撤销的设备，让它永久失效；同时保留记录，使该码可在新设备重新激活。
+    const revokedDevices = Array.isArray(current.revokedDevices)
+      ? current.revokedDevices.slice()
+      : [];
+    if (current.boundDevice && !revokedDevices.includes(current.boundDevice)) {
+      revokedDevices.push(current.boundDevice);
+    }
+
+    state[code] = {
+      status: 'revoked',
+      boundDevice: null,
+      // 解绑后不再对外展示绑定 IP（保留 lastIp 作风控参考）
+      boundIp: null,
+      lastIp: current.lastIp || current.boundIp || null,
+      usedAt: current.usedAt || null,
+      revokedAt: now().toISOString(),
+      revokedBy: 'admin',
+      revokedDevices,
+    };
     writeJsonAtomic(statePath, state);
-    return { ok: true, message: '已解绑，可重新激活', record: describe(code) };
+
+    return {
+      ok: true,
+      message: '已解绑：原设备立即失效，该卡密可在新设备重新激活',
+      record: describe(code),
+      // 仅用于服务端在线踢人，路由层不会把它返回给前端。
+      previousDevice: current.boundDevice || null,
+    };
   }
 
   /**
@@ -364,6 +472,7 @@ function createVipStore(options = {}) {
 
   return {
     verify,
+    statusByDevice,
     list,
     describe,
     reset,

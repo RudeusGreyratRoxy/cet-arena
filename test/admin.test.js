@@ -12,6 +12,17 @@ const fs = require('fs');
 const path = require('path');
 const { createVipStore } = require('../src/vipCodes');
 const { createArenaServer } = require('../src/app');
+const { io } = require('socket.io-client');
+const { APP_VERSION } = require('../src/version');
+
+function call(socket, event, payload, timeout = 5000) {
+  return new Promise((resolve) => {
+    socket.timeout(timeout).emit(event, payload, (error, response) => {
+      if (error) resolve({ ok: false, error: 'timeout' });
+      else resolve(response || { ok: false, error: 'empty' });
+    });
+  });
+}
 
 const dir = fs.mkdtempSync(path.join(__dirname, '.tmp-admin-'));
 const seedPath = path.join(dir, 'vip_codes.json');
@@ -213,14 +224,22 @@ async function main() {
 
     const reset = await http('POST', '/api/admin/codes/reset', { body: { code: 'VIP888' } });
     ok('解绑成功', reset.status === 200 && reset.data.ok === true);
-    ok('解绑后状态回到 available', reset.data.code.status === 'available');
+    ok('解绑后状态为 revoked（原设备失效）', reset.data.code.status === 'revoked');
     ok('解绑后设备 Token 已清空', reset.data.code.boundDevicePrefix === null);
     ok('解绑后 IP 已清空', reset.data.code.boundIp === null);
-    ok('state 文件已清除该卡密', !readState().VIP888);
+    ok(
+      'state 文件保留 revoked 记录且记住被撤销设备',
+      readState().VIP888 &&
+        readState().VIP888.status === 'revoked' &&
+        readState().VIP888.revokedDevices.includes(DEVICE_X)
+    );
     ok('统计已绑定数减少', reset.data.stats.used === 1); // fresh 仍在
 
     const afterReset = arena.vip.verify('VIP888', '10.9.9.2', DEVICE_Y);
-    ok('解绑后可在新设备重新激活', afterReset.ok === true && afterReset.firstUse === true);
+    ok(
+      '解绑后可在新设备重新激活',
+      afterReset.ok === true && afterReset.rebind === true
+    );
     ok('重新激活后绑定到新设备', readState().VIP888.boundDevice === DEVICE_Y);
 
     const badReset = await http('POST', '/api/admin/codes/reset', { body: { code: 'NOSUCH' } });
@@ -231,6 +250,54 @@ async function main() {
 
     const adminReset = await http('POST', '/api/admin/codes/reset', { body: { code: 'TESTSECRET1' } });
     ok('站长码不允许解绑', adminReset.status === 400 && adminReset.data.code === 'UNLIMITED');
+
+    console.log('=== 5.5 解绑后原设备失效 + 在线踢人 ===');
+    const deviceToken = 'd'.repeat(32);
+    const socket = io(base, {
+      forceNew: true,
+      reconnection: false,
+      auth: { clientVersion: APP_VERSION },
+      transports: ['websocket'],
+    });
+    await new Promise((resolve, reject) => {
+      socket.on('connect', resolve);
+      socket.on('connect_error', reject);
+    });
+
+    const activated = await call(socket, 'vip:verify', { code: 'VIP666', deviceToken });
+    ok('设备激活成功', activated.ok === true);
+    const beforeRoom = await call(socket, 'room:create', { nickname: '设备A' });
+    ok('激活后可建房', beforeRoom.ok === true);
+
+    const revokedEvent = new Promise((resolve) => socket.once('vip:revoked', resolve));
+    const kick = await http('POST', '/api/admin/codes/reset', { body: { code: 'VIP666' } });
+    ok('解绑成功并返回踢线数', kick.status === 200 && kick.data.kicked === 1);
+    ok('解绑后状态为 revoked', kick.data.code.status === 'revoked');
+
+    const event = await revokedEvent;
+    ok('在线设备收到 vip:revoked', !!event && /撤销/.test(event.message || ''));
+
+    const oldVerify = await call(socket, 'vip:verify', { code: 'VIP666', deviceToken });
+    ok('原设备再验证被拒（REVOKED）', oldVerify.ok === false && oldVerify.code === 'REVOKED');
+
+    await call(socket, 'room:leave', {});
+    const afterKick = await call(socket, 'room:create', { nickname: '设备A' });
+    ok(
+      '踢线后需要 VIP 的操作被拦截',
+      afterKick.ok === false && afterKick.code === 'VIP_REQUIRED'
+    );
+
+    const statusOld = await call(socket, 'vip:status', { deviceToken });
+    ok('vip:status 对失效设备返回非 VIP', statusOld.ok === true && statusOld.vip === false);
+
+    // 同码换新设备仍可激活
+    const otherDevice = 'e'.repeat(32);
+    const newVerify = await call(socket, 'vip:verify', { code: 'VIP666', deviceToken: otherDevice });
+    ok('新设备可重新激活该码', newVerify.ok === true);
+    const statusNew = await call(socket, 'vip:status', { deviceToken: otherDevice });
+    ok('vip:status 对新设备返回 VIP', statusNew.ok === true && statusNew.vip === true);
+
+    socket.close();
 
     console.log('=== 6. 退出与防爆破 ===');
     const out = await http('POST', '/api/admin/logout', { body: {} });

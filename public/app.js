@@ -9,7 +9,7 @@
     device: 'cetArena.deviceToken.v1',
     announcement: 'cetArena.announcementSeen.v1',
   };
-  const APP_VERSION = '20261112-vip14';
+  const APP_VERSION = '20261112-vip15';
 
   const VIEW_IDS = ['loading', 'home', 'room', 'game', 'result', 'solo', 'levels', 'trial'];
 
@@ -452,15 +452,30 @@
         setView('home');
       }
 
-      // 服务端 VIP 状态是「连接级」的：断线、重连、服务重启都会丢失，
-      // 而本地 state.vip.verified 仍是 true。旧的 `!state.vip.verified` 条件会跳过重验，
-      // 导致重连后第一次建房/加入被误判「需要激活码」并弹出验证框（假拦截）。
-      // 因此只要本地存过激活码，每次连上都静默重验一次。
+      // 服务端 VIP 状态是「连接级」的：断线、重连、服务重启都会丢失。
+      // 刷新/重连时先做两件事：
+      // 1) vip:status —— 按 deviceToken 向后端要权威授权状态（不信本地缓存）；
+      // 2) silent 重验 —— 只允许「已绑定设备」，绝不允许自动首次绑定，
+      //    否则解绑后本地残留的码会被静默绑回原设备（白嫖漏洞）。
       if (state.vip.code) {
-        verifyVipCode(state.vip.code).then((result) => {
-          if (!result.ok) clearVip();
+        refreshVipStatus().then((alive) => {
+          if (!alive) return;
+          verifyVipCode(state.vip.code, { silent: true }).then((result) => {
+            if (!result.ok) clearVip();
+          });
         });
+      } else {
+        refreshVipStatus();
       }
+    });
+
+    // 站长解绑后服务端主动推送：立即降级为普通用户（不强制断开、不打断当前对局）
+    socket.on('vip:revoked', (payload) => {
+      clearVip();
+      showToast(
+        (payload && payload.message) || '您的 VIP 授权已被站长撤销',
+        'error'
+      );
     });
 
     socket.on('disconnect', (reason) => {
@@ -745,17 +760,50 @@
     window.setTimeout(() => window.location.reload(), 700);
   }
 
-  async function verifyVipCode(rawCode) {
+  async function verifyVipCode(rawCode, options = {}) {
     const code = String(rawCode || '').trim().toUpperCase();
     if (!code) return { ok: false, error: '请输入激活码' };
 
-    const result = await request('vip:verify', { code, deviceToken: deviceToken() }, 8000);
+    const result = await request(
+      'vip:verify',
+      {
+        code,
+        deviceToken: deviceToken(),
+        // 自动重验（刷新/重连）必须带 silent：服务端在该模式下不会自动绑定新设备。
+        silent: Boolean(options.silent),
+      },
+      8000
+    );
     if (!result.ok) {
-      return { ok: false, error: result.error || '验证失败，请稍后重试' };
+      return { ok: false, error: result.error || '验证失败，请稍后重试', code: result.code };
     }
 
     persistVip(code);
     return { ok: true };
+  }
+
+  /**
+   * 向后端做一次「按设备」的权威授权判定（不信任本地缓存）。
+   * 返回 true 表示仍可继续使用本地激活态；false 表示已降级。
+   */
+  async function refreshVipStatus() {
+    if (!state.socket || !state.socket.connected) return true;
+    const result = await request(
+      'vip:status',
+      { deviceToken: deviceToken(), code: state.vip.code || '' },
+      8000
+    );
+    // 网络异常时不降级，避免误伤（真正的失效会在 silent 重验时被拦下）
+    if (!result.ok) return true;
+
+    if (!result.vip) {
+      if (state.vip.verified || state.vip.code) {
+        clearVip();
+        showToast('VIP 授权已失效，请重新输入激活码', 'error');
+      }
+      return false;
+    }
+    return true;
   }
 
   /** mode: 'create' 建房 / 'join' 加入 / 'wrong' 错词挑战，验证成功后回到对应动作。 */

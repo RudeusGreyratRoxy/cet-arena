@@ -181,6 +181,42 @@ async function main() {
     const s8 = newStore();
     ok('有历史绑定记录的码被拒', s8.generateCustom('GHOST01').code === 'STATE_CONFLICT');
 
+    console.log('=== 9.6 解绑后原设备失效（revoked 语义） ===');
+    fs.rmSync(statePath, { force: true });
+    const s9 = newStore();
+
+    const silentOnNew = s9.verify('VIP666', '10.6.0.2', DEVICE_A, { silent: true });
+    ok('silent 模式不会自动首次绑定', silentOnNew.ok === false && silentOnNew.code === 'SILENT_UNBOUND');
+    const stateAfterSilent = fs.existsSync(statePath)
+      ? JSON.parse(fs.readFileSync(statePath, 'utf8'))
+      : {};
+    ok('silent 失败后没有写入绑定', !stateAfterSilent.VIP666);
+
+    const firstBind = s9.verify('VIP888', '10.6.0.1', DEVICE_A);
+    ok('首次绑定成功', firstBind.ok === true && firstBind.firstUse === true);
+
+    const resetRes = s9.reset('VIP888');
+    ok('解绑成功', resetRes.ok === true);
+    const stateAfterReset = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+    ok('状态改为 revoked', stateAfterReset.VIP888.status === 'revoked');
+    ok('记录被撤销的设备', stateAfterReset.VIP888.revokedDevices.includes(DEVICE_A));
+    ok('只返回设备给服务端踢线用', resetRes.previousDevice === DEVICE_A);
+
+    const oldAgain = s9.verify('VIP888', '10.6.0.3', DEVICE_A);
+    ok('原设备再次验证被拒', oldAgain.ok === false && oldAgain.code === 'REVOKED');
+    const oldSilent = s9.verify('VIP888', '10.6.0.3', DEVICE_A, { silent: true });
+    ok('原设备静默重验也被拒', oldSilent.ok === false && oldSilent.code === 'REVOKED');
+
+    const newDevice = s9.verify('VIP888', '10.6.0.4', DEVICE_B);
+    ok('新设备可重新激活', newDevice.ok === true && newDevice.rebind === true);
+    ok('已绑定到新设备', JSON.parse(fs.readFileSync(statePath, 'utf8')).VIP888.boundDevice === DEVICE_B);
+    const oldStillBlocked = s9.verify('VIP888', '10.6.0.5', DEVICE_A);
+    ok('新设备激活后原设备仍被拒', oldStillBlocked.ok === false && oldStillBlocked.code === 'REVOKED');
+
+    ok('statusByDevice 对新设备返回 VIP', s9.statusByDevice(DEVICE_B).vip === true);
+    ok('statusByDevice 对原设备返回非 VIP', s9.statusByDevice(DEVICE_A).vip === false);
+    ok('statusByDevice 对专属码返回 VIP', s9.statusByDevice('', 'TESTSECRET1').vip === true);
+
     console.log('=== 10. 建房 / 加入闸门（socket 集成）===');
     resetState();
     const arena = createArenaServer({ vipRequired: true, vipOptions: { seedPath, statePath } });
