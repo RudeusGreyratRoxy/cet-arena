@@ -76,6 +76,21 @@
             </label>
             <button id="genBtn" class="btn primary" type="button">一键生成</button>
           </div>
+
+          <div class="generate-row">
+            <label class="field grow">
+              <span>自定义卡密（6–16 位字母 / 数字 / 下划线）</span>
+              <input
+                id="customCodeInput"
+                type="text"
+                maxlength="16"
+                autocomplete="off"
+                spellcheck="false"
+                placeholder="例如 CET_BOSS"
+              >
+            </label>
+            <button id="customGenBtn" class="btn primary" type="button">自定义生成</button>
+          </div>
           <div id="genResult" class="gen-result" hidden>
             <div class="gen-result-head">
               <span id="genMessage"></span>

@@ -19,6 +19,7 @@ const { APP_VERSION } = require('../src/version');
 const dir = fs.mkdtempSync(path.join(__dirname, '.tmp-vip-'));
 const seedPath = path.join(dir, 'vip_codes.json');
 const statePath = path.join(dir, 'vip_codes.state.json');
+const customPath = path.join(dir, 'vip_codes.custom.json');
 
 fs.writeFileSync(
   seedPath,
@@ -151,6 +152,34 @@ async function main() {
     ok('正常 Token 保留', normalizeDeviceToken('  ' + DEVICE_A + '  ') === DEVICE_A);
     ok('空值归一为空串', normalizeDeviceToken(null) === '' && normalizeDeviceToken(undefined) === '');
     ok('超长 Token 归一为空串', normalizeDeviceToken('x'.repeat(129)) === '');
+
+    console.log('=== 9.5 自定义卡密生成 ===');
+    fs.rmSync(customPath, { force: true });
+    const s7 = newStore();
+    const madeCustom = s7.generateCustom('  boss_2026  ');
+    ok('自定义码生成成功并归一化', madeCustom.ok === true && madeCustom.code === 'BOSS_2026');
+    ok('写入 custom 文件（不进种子）', fs.existsSync(customPath));
+    const seedAfter = JSON.parse(fs.readFileSync(seedPath, 'utf8'));
+    ok('种子文件未被写入', seedAfter.codes.BOSS_2026 === undefined);
+    ok('立即生效（无需重启）', s7.verify('BOSS_2026', '10.5.0.1', DEVICE_A).ok === true);
+    ok(
+      '重新实例化后仍在列表里',
+      newStore().list().some((item) => item.code === 'BOSS_2026')
+    );
+
+    ok('重复自定义码被拒', s7.generateCustom('BOSS_2026').code === 'DUPLICATE');
+    ok('小写重复同样被拒', s7.generateCustom('boss_2026').code === 'DUPLICATE');
+    ok('与种子已有码冲突被拒', s7.generateCustom('VIP888').code === 'DUPLICATE');
+    ok('含中文被拒', s7.generateCustom('中文CODE').code === 'BAD_FORMAT');
+    ok('含连字符被拒', s7.generateCustom('BOSS-2026').code === 'BAD_FORMAT');
+    ok('过短被拒', s7.generateCustom('AB12').code === 'TOO_SHORT');
+    ok('过长被拒', s7.generateCustom('A'.repeat(17)).code === 'TOO_LONG');
+    ok('非字符串被拒', s7.generateCustom(null).code === 'BAD_FORMAT');
+
+    // 状态文件里有绑定记录的码（种子已删）不允许复用
+    fs.writeFileSync(statePath, JSON.stringify({ GHOST01: { status: 'used', boundDevice: DEVICE_A } }));
+    const s8 = newStore();
+    ok('有历史绑定记录的码被拒', s8.generateCustom('GHOST01').code === 'STATE_CONFLICT');
 
     console.log('=== 10. 建房 / 加入闸门（socket 集成）===');
     resetState();

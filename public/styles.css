@@ -2998,3 +2998,45 @@ a:focus-visible {
   color: var(--text);
   border-color: var(--line-strong);
 }
+
+/* ---------------------------------------------------------------
+   购买页文案 + 关于我们（vip13）
+   --------------------------------------------------------------- */
+.vip-valid {
+  margin: 4px 0 0;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.vip-addon {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.footer-link {
+  padding: 0;
+  border: 0;
+  color: #8fa3c0;
+  background: transparent;
+  font-size: 10px;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+}
+
+.footer-link:hover {
+  color: var(--text);
+}
+
+.about-text {
+  margin: 0;
+  color: #cbd5e1;
+  font-size: 13.5px;
+  line-height: 1.85;
+  white-space: pre-wrap;
+  word-break: break-word;
+}

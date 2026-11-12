@@ -16,6 +16,7 @@ const { createArenaServer } = require('../src/app');
 const dir = fs.mkdtempSync(path.join(__dirname, '.tmp-admin-'));
 const seedPath = path.join(dir, 'vip_codes.json');
 const statePath = path.join(dir, 'vip_codes.state.json');
+const customPath = path.join(dir, 'vip_codes.custom.json');
 
 fs.writeFileSync(
   seedPath,
@@ -42,6 +43,14 @@ const DEVICE_Y = '0123456789abcdef0123456789abcdef';
 
 function readSeed() {
   return JSON.parse(fs.readFileSync(seedPath, 'utf8'));
+}
+
+function readCustom() {
+  try {
+    return JSON.parse(fs.readFileSync(customPath, 'utf8'));
+  } catch (error) {
+    return { version: 1, codes: {} };
+  }
 }
 
 function readState() {
@@ -133,8 +142,9 @@ async function main() {
     ok('生成 5 张成功', gen.status === 200 && gen.data.created.length === 5);
     ok('卡密为 6 位大写字母/数字', gen.data.created.every((code) => /^[A-Z0-9]{6}$/.test(code)));
     ok('新卡密互不重复', new Set(gen.data.created).size === 5);
-    ok('已写入 vip_codes.json', gen.data.created.every((code) => Boolean(readSeed().codes[code])));
-    ok('新卡密类型为普通码', gen.data.created.every((code) => readSeed().codes[code].type === 'once'));
+    ok('已写入 vip_codes.custom.json（运行时新增）', gen.data.created.every((code) => Boolean(readCustom().codes[code])));
+    ok('种子文件未被改动', !Object.keys(readSeed().codes).some((code) => gen.data.created.includes(code)));
+    ok('新卡密类型为普通码', gen.data.created.every((code) => readCustom().codes[code].type === 'once'));
     ok('生成后总数变为 8', gen.data.stats.total === 8);
 
     const fresh = gen.data.created[0];
@@ -148,6 +158,42 @@ async function main() {
     ok('超过 100 张被拒', tooMany.status === 400 && tooMany.data.code === 'TOO_MANY');
     const zero = await http('POST', '/api/admin/codes/generate', { body: { count: 0 } });
     ok('数量 0 被拒', zero.status === 400 && zero.data.code === 'BAD_COUNT');
+
+    console.log('=== 4.5 自定义卡密 ===');
+    const custom = await http('POST', '/api/admin/codes/generate-custom', { body: { code: 'cet_boss_01' } });
+    ok('自定义生成成功', custom.status === 200 && custom.data.ok === true);
+    ok('自动归一化为大写', custom.data.code === 'CET_BOSS_01');
+    ok('写入 custom 文件且类型为 once', readCustom().codes.CET_BOSS_01.type === 'once');
+    ok('种子文件仍未被改动', readSeed().codes.CET_BOSS_01 === undefined);
+    ok('生成后立即出现在列表中', custom.data.codes.some((item) => item.code === 'CET_BOSS_01'));
+    ok('总数加 1', custom.data.stats.total === 9);
+
+    const dupSame = await http('POST', '/api/admin/codes/generate-custom', { body: { code: 'CET_BOSS_01' } });
+    ok('重复自定义码被拒', dupSame.status === 400 && dupSame.data.code === 'DUPLICATE');
+    const dupLower = await http('POST', '/api/admin/codes/generate-custom', { body: { code: 'cet_boss_01' } });
+    ok('大小写不同仍判重复', dupLower.status === 400 && dupLower.data.code === 'DUPLICATE');
+    const dupSeed = await http('POST', '/api/admin/codes/generate-custom', { body: { code: 'VIP888' } });
+    ok('与种子里已有码冲突被拒', dupSeed.status === 400 && dupSeed.data.code === 'DUPLICATE');
+
+    const badChar = await http('POST', '/api/admin/codes/generate-custom', { body: { code: '中文CODE' } });
+    ok('非法字符被拒', badChar.status === 400 && badChar.data.code === 'BAD_FORMAT');
+    const tooShort = await http('POST', '/api/admin/codes/generate-custom', { body: { code: 'ABC' } });
+    ok('过短被拒', tooShort.status === 400 && tooShort.data.code === 'TOO_SHORT');
+    const tooLong = await http('POST', '/api/admin/codes/generate-custom', { body: { code: 'A'.repeat(17) } });
+    ok('过长被拒', tooLong.status === 400 && tooLong.data.code === 'TOO_LONG');
+
+    const customNoAuth = await http('POST', '/api/admin/codes/generate-custom', {
+      body: { code: 'NOAUTH01' },
+      cookie: '',
+    });
+    ok('未登录自定义生成 401', customNoAuth.status === 401);
+    ok('未登录不会写入 custom 文件', readCustom().codes.NOAUTH01 === undefined);
+
+    const reloadedCustom = createVipStore({ seedPath, statePath });
+    ok(
+      '重启后自定义码仍可验证',
+      reloadedCustom.verify('CET_BOSS_01', '198.51.100.9', DEVICE_X).ok === true
+    );
 
     console.log('=== 5. 解绑 / 重置 ===');
     arena.vip.verify('VIP888', '10.9.9.1', DEVICE_X);

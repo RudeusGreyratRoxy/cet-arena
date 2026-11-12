@@ -24,6 +24,8 @@
     statPlayers: el('statPlayers'),
     genCount: el('genCount'),
     genBtn: el('genBtn'),
+    customCodeInput: el('customCodeInput'),
+    customGenBtn: el('customGenBtn'),
     genResult: el('genResult'),
     genMessage: el('genMessage'),
     genList: el('genList'),
@@ -158,6 +160,7 @@
   function setBusy(busy) {
     state.busy = busy;
     ui.genBtn.disabled = busy;
+    if (ui.customGenBtn) ui.customGenBtn.disabled = busy;
   }
 
   // ---------------------------------------------------------------- 渲染
@@ -596,6 +599,45 @@
     toast(`已生成 ${state.created.length} 张新卡密`);
   }
 
+  async function handleGenerateCustom() {
+    const raw = (ui.customCodeInput.value || '').trim();
+    if (!raw) {
+      toast('请输入自定义卡密');
+      ui.customCodeInput.focus();
+      return;
+    }
+    // 体验层先校验一次；服务端会再校验（去空格、转大写、查重）
+    if (!/^[A-Za-z0-9_]{6,16}$/.test(raw)) {
+      toast('卡密需为 6–16 位字母、数字或下划线');
+      ui.customCodeInput.focus();
+      return;
+    }
+
+    setBusy(true);
+    const res = await request('/api/admin/codes/generate-custom', {
+      method: 'POST',
+      body: { code: raw },
+    });
+    setBusy(false);
+
+    if (res.status === 401) {
+      showLogin('登录已过期，请重新登录');
+      return;
+    }
+    if (!res.ok) {
+      toast(res.data.message || '生成失败');
+      return;
+    }
+
+    state.created = [res.data.code];
+    state.codes = Array.isArray(res.data.codes) ? res.data.codes : state.codes;
+    state.stats = res.data.stats || state.stats;
+    renderGenResult(state.created, res.data.message || '已生成自定义卡密');
+    ui.customCodeInput.value = '';
+    render();
+    toast(res.data.message || '已生成自定义卡密');
+  }
+
   async function handleReset(code) {
     if (!code || state.busy) return;
     const confirmed = window.confirm(
@@ -632,6 +674,10 @@
     ui.loginForm.addEventListener('submit', handleLogin);
     ui.logoutBtn.addEventListener('click', handleLogout);
     ui.genBtn.addEventListener('click', handleGenerate);
+    ui.customGenBtn.addEventListener('click', handleGenerateCustom);
+    ui.customCodeInput.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') handleGenerateCustom();
+    });
     ui.searchInput.addEventListener('input', renderTable);
 
     ui.tabCodes.addEventListener('click', () => switchTab('codes'));

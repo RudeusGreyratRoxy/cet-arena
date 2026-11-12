@@ -286,6 +286,29 @@ function createArenaServer(options = {}) {
     });
   });
 
+  // 自定义卡密：固定生成 once 码，查重（内存/状态文件）后写入运行时新增文件。
+  app.post('/api/admin/codes/generate-custom', requireAdmin, (req, res) => {
+    const body = req.body || {};
+    const result = vip.generateCustom(body.code);
+    audit('admin_generate_custom_code', {
+      ip: httpIp(req),
+      code: maskCode(result.ok ? result.code : body.code),
+      ok: result.ok,
+      reason: result.ok ? null : result.code || null,
+    });
+    if (!result.ok) {
+      res.status(400).json(result);
+      return;
+    }
+    res.json({
+      ok: true,
+      code: result.code,
+      message: result.message,
+      codes: vip.list(),
+      stats: vip.stats(),
+    });
+  });
+
   // ---- 公告管理（站长后台）----
   // 审计只记长度与结果，**不记正文**：公告可能含内部信息。
   app.post('/api/admin/announcement', requireAdmin, (req, res) => {

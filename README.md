@@ -141,7 +141,8 @@ $env:CI="true"
 - **复盘**：始终展示单词拼写、词性、完整释义和你的对错/未作答标记；答错后纠正的题仍显示为答错。竞速复盘还包含双方进度、用时和错误数。
 - **误词自动入库**：结算复盘渲染时，把「答错」或「曾答错后改正」的单词写入浏览器 localStorage（键 `cetArena.wrongBook.v1`），复盘标题会提示「N 个新错词已存入错词本」；重复答错不重复入库，但连对清零、错误次数 +1。错词本本身只对 VIP 开放。
 - **首页更新公告**：站长在 `/admin` →「公告管理」发布（最多 500 字，保留换行，留空即下架）；首页顶部显示横幅（`textContent` 渲染 + `white-space: pre-wrap`，不解析 HTML）。前端按 `updatedAt` 去重：同一版本关闭后不再弹出，发布新版本才会再次出现。`GET /api/announcement` 公开且 `no-store`，`POST /api/admin/announcement` 需站长登录。
-- **VIP 激活码闸门**：点「创建房间」或「加入房间」都会先弹同一个全屏激活码遮罩；**验证通过后既能建房也能加入**，未验证则两者都被拦截。遮罩内「查看套餐」进入价格页，提供三档：**孤狼独行 ￥19.9（1 个码）/ 双人成行 ￥29.9（2 个码）/ 宿舍开黑 ￥59.9（6 个码）**，点任一购买按钮只提示「支付通道维护中，请联系站长获取激活码」，**不接真实支付、不出现收款码**。验证成功写入 `localStorage`（键 `cetArena.vip.v1`），刷新后自动静默重验；首页底部有「清除激活状态」小字按钮，点击即清空本地激活态并刷新，便于换人使用。
+- **VIP 激活码闸门**：点「创建房间」或「加入房间」都会先弹同一个全屏激活码遮罩；**验证通过后既能建房也能加入**，未验证则两者都被拦截。遮罩内「查看套餐」进入价格页，提供三档：**孤狼独行 ￥19.9（1 个码）/ 双人成行 ￥29.9（2 个码）/ 宿舍开黑 ￥59.9（6 个码）**，点任一购买按钮只提示「支付通道维护中，请联系站长获取激活码」，**不接真实支付、不出现收款码**。验证成功写入 `localStorage`（键 `cetArena.vip.v1`），刷新后自动静默重验；首页底部有「清除激活状态」小字按钮，点击即清空本地激活态并刷新，便于换人使用。；所有套餐**有效期 1 年**，卡密输入框下方标注「⭐ 增值服务：专属定制卡密 +9.9元（需联系站长人工审核生成）」
+- **关于我们**：首页 Footer 新增「关于我们」入口，点击弹出轻量模态框（复用留言弹窗的遮罩/卡片样式）；文案为静态常量，渲染只用 `textContent`，不拼 HTML。
 - **一码一人**：每个普通激活码只能绑定一台设备。绑定主体是浏览器首次打开页面时生成并持久化在 `localStorage` 的 **device_token**，**不是 IP** —— 大学校园网普遍是 NAT，全校共用一个公网 IP，按 IP 绑定等于「一人买码、全校白嫖」。同一台设备换网络（宿舍 Wi-Fi ↔ 手机热点）照样放行，换设备一律提示「该卡密已绑定其他设备」。IP 只作为风控参考记录。房主建房后，加入者必须**自己**输入有效激活码，没有免码席位。`[已废弃-见环境变量]` 为专属码（现由环境变量 `VIP_UNLIMITED_CODES` 注入），不限次、不绑设备。
 - **选项着色**：答对时正确选项标绿、其余弱化；答错时错选标红、正确选项标绿。服务端只在**作答后**才下发 `correctIndex`，避免提前泄题。
 - 刷新页面时，浏览器用 localStorage 中的 `sessionId` 自动尝试重连；失败则回首页。
@@ -466,7 +467,8 @@ cet-arena/
 │  ├─ words.json           # CET-4 词库（2868 词，多释义 + 词性 + 词频）
 │  ├─ levels.json          # 闯关关卡（3 关 × 50 词，只存词条 id）
 │  ├─ announcement.json    # 首页公告（运行时状态，不入库，由后台发布）
-│  └─ vip_codes.json       # 激活码种子（运行状态另存 vip_codes.state.json，不入库）
+│  ├─ vip_codes.json       # 激活码种子（只读、入库）
+│  └─ vip_codes.custom.json  # 运行时新增卡密（批量/自定义生成，不入库）
 ├─ public/
 │  ├─ index.html            # 单页视图（首页/房间/答题/结算/错词/关卡/闯关）+ 模式选择 + 复盘
 │  ├─ styles.css            # 深色桌面/移动端样式
@@ -542,13 +544,14 @@ cet-arena/
 - **留言板存储与动态配额**：`data/messages.json`（已 gitignore）保存 `{ id, content, deviceHash, devicePrefix, ip, createdAt, status }`；内容去掉控制字符并压缩空白，按 **码点** 计算长度，超过 50 字拒绝。配额按 `device_token` 的 SHA-256 **实时统计「未处理」条数**（`status !== 'handled'`），同一设备**同时最多 5 条未处理**留言；站长标记已处理或删除后，未处理数下降，额度自动归还。另加 5 秒冷却防连点。只落设备 Token 前 8 位与哈希，不保存完整凭据。公开入口走 socket `message:create`（无需激活码），后台读取/处理/删除走受密码保护的 `/api/admin/messages*`。
 - **重连**：创建/加入时返回随机 `sessionId`，刷新后 `room:resume` 恢复；竞速模式还会补发个人当前题、进度与惩罚截止时间。
 - **房间回收**：双方都离线时不再死等 30 分钟——对局已结束的房间**立即删除**；进行中的对局保留 `emptyRoomGraceMs`（默认 **60 秒**，移动端切后台/弱网重连留足时间）供「刷新重连」，期间有人通过 `room:resume` 回来就取消回收；60 秒兜底扫描仅作为最后保险。`deleteRoom` 会一并清理子定时器、`sessions`、`socketPlayers`、`socket.data.roomCode` 并 `io.socketsLeave(room.code)`，不留幽灵连接。
-- **激活码存储**：`data/vip_codes.json` 只存放种子卡密（入库，`type` 为 `unlimited` 或 `once`）；运行状态（`used` / `boundDevice` / `boundIp` / `lastIp` / `usedAt`）写入 `data/vip_codes.state.json`（已 gitignore），先写临时文件再 rename，保证原子性，也避免 `git pull` 与线上状态冲突。
+- **激活码存储**：`data/vip_codes.json` 只存放种子卡密（入库、只读，`type` 为 `unlimited` 或 `once`）；后台批量生成/自定义生成的卡密写入 `data/vip_codes.custom.json`（已 gitignore），启动时合并进内存，避免线上生成卡密导致 `git pull` 冲突；运行状态（`used` / `boundDevice` / `boundIp` / `lastIp` / `usedAt`）写入 `data/vip_codes.state.json`（已 gitignore），先写临时文件再 rename，保证原子性，也避免 `git pull` 与线上状态冲突。
 - **激活码绑定主体是设备 Token，不是 IP**：早期版本按「首个验证 IP」绑定，但大学校园网普遍是 NAT，全校共用一个公网 IP，等于「一人买码、全校白嫖」。现在前端 `localStorage` 的 `cetArena.deviceToken.v1` 保存一个 32 位随机 Token（优先 `crypto.randomUUID()`，回退 `crypto.getRandomValues()` / `Math.random()`），首次打开页面即生成并在每次 `vip:verify` 时上传；后端把它作为唯一绑定主体，换设备一律拒绝，同设备换网络（宿舍 Wi-Fi ↔ 热点）照样放行。IP 降级为风控参考，只记录 `boundIp`（首次）与 `lastIp`（最近），不参与放行判断。后端会对 Token 做规范化（16–128 位、仅 `[A-Za-z0-9_-]`），缺失或非法直接返回 `DEVICE_REQUIRED`。
 - **激活码校验**：验证逻辑全同步执行，进入临界区前加内存锁，同一毫秒的并发请求只有一个能完成「校验 + 标记已用 + 落盘」；普通码首次使用即绑定设备 Token，Token 不一致直接拒绝。`room:create` 与 `room:join` 都要求 `socket.data.vip === true`，服务端二次校验，绕过前端也无效。
 - **旧数据兼容**：历史记录只有 `boundIp`、没有 `boundDevice`。这种记录在「同 IP 首次带 Token 请求」时会被平滑迁移（补写设备 Token），避免老客户突然全部失效；换 IP 则仍然拒绝。
 - **站长后台鉴权**：`/admin` 页面本身不含数据，进入后需提交站长密码。密码默认写死 `boss2026`，可用环境变量 `ADMIN_PASSWORD` 覆盖。校验成功后签发 32 字节随机 token 存于服务端内存，并通过 `HttpOnly` + `SameSite=Strict` Cookie 下发，刷新不掉线、JS 读不到；token 有效期 12 小时，服务重启后失效需重新登录。比较密码使用 `crypto.timingSafeEqual`（长度不等也走一次等长比较），同一 IP 连续错 5 次锁定 10 分钟。所有 `/api/admin/*` 数据与写操作接口在服务端二次校验，未登录统一返回 401，普通玩家即使猜到路径也拿不到任何卡密。
 - **后台登录态探测**：`GET /api/admin/session` 只返回 `{ authed: true|false }`（状态码恒为 200），供首屏静默判断，避免未登录时浏览器控制台刷 401 报错；真正的数据接口 `/api/admin/state` 仍严格 401。
 - **卡密生成**：`POST /api/admin/codes/generate` 按数量（1–100，超出拒绝）生成 6 位随机码，字符集去掉 `I/O/0/1` 以免客户手输混淆；生成前查重、批量内也去重。新码同时写入内存 `codes` 与 `data/vip_codes.json`（先写临时文件再 rename），因此**无需重启**即可被 `vip:verify` 校验使用。
+- **自定义卡密**：`POST /api/admin/codes/generate-custom`（需站长登录），只生成 `once` 码；归一化为大写后按 `/^[A-Z0-9_]{6,16}$/` 校验，查重覆盖三处——内存 `codes`（种子 + 运行时新增 + 环境变量专属码）、`vip_codes.state.json` 的历史绑定记录、写入前双检；命中一律拒绝、绝不覆盖，审计日志对码打码（`maskCode`）。
 - **卡密解绑**：`POST /api/admin/codes/reset` 删除 `data/vip_codes.state.json` 中该卡密的记录并原子落盘，卡片立即回到「未使用」；客户换电脑后可用同一张码在新 IP 重新激活。站长码（`unlimited`）不参与绑定，接口直接拒绝；对未使用的码重复解绑返回 `NOT_BOUND`，避免前端误操作。
 - **后台缓存策略**：`/admin`、`/admin.js`、`/admin.css` 一律 `Cache-Control: no-store` 且带 `X-Robots-Tag: noindex`，防止改了后台脚本后手机浏览器仍跑 7 天缓存里的旧版本，所以后台资源不需要参与 `APP_VERSION` 版本号机制。
 - **审计日志**：连接、绑定玩家、断开、房间关闭都会输出一行 `[audit] {json}` 到 stdout（由 PM2 收集进 `cet-arena-out.log`，受 pm2-logrotate 10M×5 管理），字段含 ISO 时间、IP、昵称、房间码、在线时长、断开原因与剩余在线人数，便于排查异常与作弊。后台登录、生成卡密、解绑卡密同样记录 `admin_login` / `admin_generate_codes` / `admin_reset_code` 审计事件。
@@ -636,6 +639,9 @@ cet-arena/
 - [x] 错词挑战只考错词，同一单词连续答对 3 次后移出错词本，答错则连对清零
 - [x] 后台「公告管理」可发布 / 下架公告，首页横幅按 `updatedAt` 去重，关闭后同版本不再弹出
 - [x] 公告渲染使用 `textContent`（含换行保留），未登录调用 `POST /api/admin/announcement` 返回 401
+- [x] 购买页三档套餐均标注「有效期：1年」，卡密输入框下方有「⭐ 增值服务：专属定制卡密 +9.9元」说明
+- [x] 后台可自定义生成卡密（6–16 位字母/数字/下划线），重复码被拒，写入 `vip_codes.custom.json` 而非种子文件
+- [x] 首页 Footer「关于我们」可打开模态框，文案用 `textContent` 渲染
 - [x] 单人模式选项着色正确：答对标绿、答错标红并同时高亮正确项（回归用例）
 - [x] 点「创建房间」弹房主通道、点「加入房间」弹单人通道，两个弹窗文案与校验独立
 - [x] 价格页提供三档套餐：孤狼独行 ￥19.9（1 码）/ 双人成行 ￥29.9（2 码）/ 宿舍开黑 ￥59.9（6 码），点任一按钮只提示维护中且无收款码
@@ -676,7 +682,7 @@ cet-arena/
 - [x] 顶部显示当前在线玩家数与房间数
 - [x] 输入数量一键生成新卡密，6 位大写字母 + 数字、批量内与库内均不重复
 - [x] 新生成的卡密立即出现在表格中，且**不重启服务**就能通过 `vip:verify` 验证成功
-- [x] 生成的卡密已写入 `data/vip_codes.json`，重启进程后仍在
+- [x] 生成的卡密已写入 `data/vip_codes.custom.json`（种子文件保持只读），重启进程后仍在
 - [x] 已绑定卡密显示红色「解绑 / 重置」按钮，其余状态不显示
 - [x] 解绑后该卡密立即变为「未使用」，**设备 Token、绑定 IP、绑定时间一并清空**，`vip_codes.state.json` 中记录被删除
 - [x] 解绑后可用同一张卡密在**另一台设备**重新激活成功（换电脑/换手机场景）

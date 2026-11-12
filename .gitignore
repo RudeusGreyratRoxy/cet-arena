@@ -12,6 +12,9 @@ package-lock.json
 # 激活码运行状态（含绑定 IP / 设备），只在服务器本地保存，绝不入库
 data/vip_codes.state.json
 
+# 运行时新增的卡密（批量生成 / 自定义生成），种子文件保持只读，避免 pull 冲突
+data/vip_codes.custom.json
+
 # 站长留言板数据（含用户反馈与设备指纹），只在服务器本地保存
 data/messages.json
 

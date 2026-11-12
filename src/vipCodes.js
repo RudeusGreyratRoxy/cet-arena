@@ -31,6 +31,11 @@ const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const CODE_LENGTH = 6;
 const MAX_GENERATE = 100;
 
+// 自定义卡密：6–16 位，只允许大写字母 / 数字 / 下划线（归一化后校验）。
+const CUSTOM_CODE_PATTERN = /^[A-Z0-9_]{6,16}$/;
+const CUSTOM_MIN_LENGTH = 6;
+const CUSTOM_MAX_LENGTH = 16;
+
 // 设备 Token：前端随机生成，长度与字符集都做限制，避免塞入任意脏数据。
 const DEVICE_TOKEN_MIN = 16;
 const DEVICE_TOKEN_MAX = 128;
@@ -79,12 +84,25 @@ function createVipStore(options = {}) {
   const dataDir = options.dataDir || path.join(__dirname, '..', 'data');
   const seedPath = options.seedPath || path.join(dataDir, 'vip_codes.json');
   const statePath = options.statePath || path.join(dataDir, 'vip_codes.state.json');
+  // 运行时新增的卡密（批量生成 / 自定义生成）单独落一个不入库的文件：
+  // 种子文件保持只读，避免线上生成卡密后 git pull 冲突。
+  const customPath =
+    options.customPath || path.join(path.dirname(seedPath), 'vip_codes.custom.json');
   const now = options.now || (() => new Date());
 
   // 每次启动重新读一次种子文件；对象常驻内存，新生成的卡密无需重启即可验证。
   const seed = readJson(seedPath, null) || { version: 1, codes: {} };
   if (!seed.codes || typeof seed.codes !== 'object') seed.codes = {};
   const codes = seed.codes;
+
+  // 合并运行时新增的卡密（不入库）。种子里已有的同码以种子为准。
+  const custom = readJson(customPath, null) || { version: 1, codes: {} };
+  if (!custom.codes || typeof custom.codes !== 'object') custom.codes = {};
+  for (const [customCode, definition] of Object.entries(custom.codes)) {
+    if (!Object.prototype.hasOwnProperty.call(codes, customCode)) {
+      codes[customCode] = definition;
+    }
+  }
 
   // 专属（无限免绑）码不再随仓库下发：由环境变量 VIP_UNLIMITED_CODES 注入，
   // 避免明文卡密写进 git 历史。格式为逗号分隔，例如 "CODE1,CODE2"。
@@ -112,6 +130,12 @@ function createVipStore(options = {}) {
 
   function has(code) {
     return Object.prototype.hasOwnProperty.call(codes, code);
+  }
+
+  /** 把新生成的卡密写入「运行时新增」文件（不入库），并同步内存。 */
+  function persistCustom(entries) {
+    Object.assign(custom.codes, entries);
+    writeJsonAtomic(customPath, custom);
   }
 
   function describe(code) {
@@ -259,6 +283,7 @@ function createVipStore(options = {}) {
 
     const label = options.label || '批量生成';
     const created = [];
+    const defs = {};
     // 撞码概率极低，但保留上限，避免随机源异常时死循环。
     const guardLimit = count * 200 + 1000;
     let guard = 0;
@@ -270,6 +295,7 @@ function createVipStore(options = {}) {
       }
       if (has(candidate)) continue;
       codes[candidate] = { type: 'once', label };
+      defs[candidate] = codes[candidate];
       created.push(candidate);
     }
 
@@ -277,11 +303,77 @@ function createVipStore(options = {}) {
       return { ok: false, code: 'GENERATE_FAILED', message: '生成失败，请重试' };
     }
 
-    writeJsonAtomic(seedPath, seed);
+    persistCustom(defs);
     return { ok: true, created, message: `已生成 ${created.length} 张卡密` };
   }
 
-  return { verify, list, describe, reset, generate, stats, seedPath, statePath };
+  /**
+   * 站长自定义卡密：固定生成 once 码。
+   * 规则：去空格转大写后 6–16 位，只允许 A-Z / 0-9 / 下划线。
+   * 查重三处：内存 codes（种子 + 运行时新增 + 环境变量专属码）、状态文件、写前双检。
+   */
+  function generateCustom(rawCode) {
+    if (typeof rawCode !== 'string') {
+      return { ok: false, code: 'BAD_FORMAT', message: '请输入自定义卡密' };
+    }
+    const code = normalizeCode(rawCode);
+    if (!code) {
+      return { ok: false, code: 'BAD_FORMAT', message: '请输入自定义卡密' };
+    }
+    if (code.length < CUSTOM_MIN_LENGTH) {
+      return {
+        ok: false,
+        code: 'TOO_SHORT',
+        message: `自定义卡密至少 ${CUSTOM_MIN_LENGTH} 位，当前 ${code.length} 位`,
+      };
+    }
+    if (code.length > CUSTOM_MAX_LENGTH) {
+      return {
+        ok: false,
+        code: 'TOO_LONG',
+        message: `自定义卡密最多 ${CUSTOM_MAX_LENGTH} 位，当前 ${code.length} 位`,
+      };
+    }
+    if (!CUSTOM_CODE_PATTERN.test(code)) {
+      return {
+        ok: false,
+        code: 'BAD_FORMAT',
+        message: '只能使用字母、数字和下划线（不支持中文、空格、连字符）',
+      };
+    }
+    if (has(code)) {
+      return { ok: false, code: 'DUPLICATE', message: `卡密「${code}」已存在，请换一个` };
+    }
+    if (state[code]) {
+      return {
+        ok: false,
+        code: 'STATE_CONFLICT',
+        message: `卡密「${code}」存在历史绑定记录，请换一个`,
+      };
+    }
+
+    codes[code] = { type: 'once', label: '自定义' };
+    persistCustom({ [code]: codes[code] });
+    return {
+      ok: true,
+      code,
+      record: describe(code),
+      message: `已生成自定义卡密「${code}」`,
+    };
+  }
+
+  return {
+    verify,
+    list,
+    describe,
+    reset,
+    generate,
+    generateCustom,
+    stats,
+    seedPath,
+    statePath,
+    customPath,
+  };
 }
 
 module.exports = { createVipStore, normalizeCode, normalizeType, normalizeDeviceToken };

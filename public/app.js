@@ -9,9 +9,16 @@
     device: 'cetArena.deviceToken.v1',
     announcement: 'cetArena.announcementSeen.v1',
   };
-  const APP_VERSION = '20261112-vip12';
+  const APP_VERSION = '20261112-vip13';
 
   const VIEW_IDS = ['loading', 'home', 'room', 'game', 'result', 'solo', 'levels', 'trial'];
+
+  // 关于我们：纯静态文案，渲染时用 textContent（不拼 HTML）
+  const ABOUT_TEXT =
+    'CET Arena 是一个由个人独立工作室用心打造的大学英语四六级双人对战平台。' +
+    '我们致力于打破枯燥的背单词模式，将高频词汇与刺激的实时竞技相结合，' +
+    '让你在‘开黑’中不知不觉搞定四六级。目前网站处于持续用爱发电和迭代升级中，' +
+    '如果你有任何建议，或者想寻求英语相关服务，欢迎通过留言板与我们联系！感谢你的支持！';
   const LETTERS = ['A', 'B', 'C', 'D'];
 
   const el = {
@@ -82,6 +89,12 @@
     announcementText: document.getElementById('announcementText'),
     announcementTime: document.getElementById('announcementTime'),
     announcementClose: document.getElementById('announcementClose'),
+
+    // 关于我们
+    aboutBtn: document.getElementById('aboutBtn'),
+    aboutOverlay: document.getElementById('aboutOverlay'),
+    aboutCloseBtn: document.getElementById('aboutCloseBtn'),
+    aboutText: document.getElementById('aboutText'),
     lobbyCode: document.getElementById('lobbyCode'),
     roomLevelBadge: document.getElementById('roomLevelBadge'),
     shareCode: document.getElementById('shareCode'),
@@ -302,6 +315,9 @@
 
     el.announcementClose.addEventListener('click', closeAnnouncement);
 
+    el.aboutBtn.addEventListener('click', openAbout);
+    el.aboutCloseBtn.addEventListener('click', closeAbout);
+
     // VIP 遮罩（激活码 / 套餐）
     el.vipVerifyBtn.addEventListener('click', submitVipCode);
     el.vipCodeInput.addEventListener('keydown', (event) => {
@@ -390,6 +406,26 @@
       `更新于 ${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ` +
       `${pad(date.getHours())}:${pad(date.getMinutes())}`
     );
+  }
+
+  // ---------------------------------------------------------------
+  // 关于我们：复用留言弹窗的遮罩/卡片样式，纯 textContent 渲染
+  // ---------------------------------------------------------------
+  function openAbout() {
+    if (!el.aboutOverlay) return;
+    el.aboutText.textContent = ABOUT_TEXT;
+    el.aboutOverlay.hidden = false;
+    document.body.classList.add('vip-open');
+  }
+
+  function closeAbout() {
+    if (!el.aboutOverlay) return;
+    el.aboutOverlay.hidden = true;
+    // 还有其他遮罩开着时不要解锁页面滚动
+    const others =
+      (el.contactOverlay && !el.contactOverlay.hidden) ||
+      (el.vipOverlay && !el.vipOverlay.hidden);
+    if (!others) document.body.classList.remove('vip-open');
   }
 
   function connectSocket() {

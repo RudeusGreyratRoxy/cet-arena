@@ -7,6 +7,7 @@
 > 强制格式（最新在最上）：`[YYYY-MM-DD HH:mm] 版本号 | 核心改动 | 遗留问题`
 > 每次任务结束**必须**在此节点顶部新增一行，无需用户提醒。
 
+- [2026-11-12 21:35] `20261112-vip13`（待部署） | 购买页三档套餐加「有效期：1年」、卡密框下加「⭐ 增值服务：专属定制卡密 +9.9元」；首页 Footer 新增「关于我们」模态（复用留言弹窗样式、`textContent` 防 XSS）；后台新增自定义卡密生成（`POST /api/admin/codes/generate-custom`，6–16 位 `A-Z/0-9/_`，大小写归一，三级查重：内存 codes / state 历史绑定 / 写前双检，审计 `maskCode` 打码）；**架构调整**：批量与自定义生成的码改存 `data/vip_codes.custom.json`（已 gitignore、启动合并），种子 `vip_codes.json` 恢复只读，彻底消除 pull 冲突；`APP_VERSION → vip13`；13 套测试全绿（vip 50 / admin 64） | 待部署
 - [2026-11-12 21:04] `20261112-vip12`（待部署） | 新增首页更新公告：`data/announcement.json`（运行时态、已 gitignore）+ `GET /api/announcement`（公开、`no-store`）+ `POST /api/admin/announcement`（`requireAdmin`、≤500 字、审计只记长度不记正文）；首页横幅按 `updatedAt` 去重（localStorage），`textContent` 渲染 + `pre-wrap` 保留换行；后台新增第三个 tab（`switchTab` 改三值枚举 + `dirty` 标记防 30s 轮询覆盖）；`APP_VERSION` → vip12；新增 announcement 测试，13 套全绿；预置首条维护公告 | 待部署，部署时需同时保留 `ADMIN_PASSWORD` 与 `VIP_UNLIMITED_CODES`
 - [2026-11-12 20:48] `20261112-vip11`（版本不变） | 公告功能方案设计中：完成只读排查与设计——`data/announcement.json`（运行态、需 gitignore）+ `GET /api/announcement`（公开、no-store）+ `POST /api/admin/announcement`（requireAdmin）+ 首页横幅 + 后台第三个 tab + localStorage 按 `updatedAt` 防重 + 审计只记长度不记正文；未写任何代码、未改配置 | 待老板确认后进入 Phase 2 实现
 - [2026-11-12 20:38] `20261112-vip11`（已上线） | 专属码已调整为易记安全组合（`CETWINNER2026` / `WORDMASTER888`，由环境变量 `VIP_UNLIMITED_CODES` 注入），上一组长串（`NEBULAORBIT27` / `QUARTZMEADOW88`）已失效；pm2 安全重启（pid 657327，↺19）并 `pm2 save`；线上实测新码 `kind=unlimited` 且免设备 Token、旧长串带/不带 Token 两路均 `INVALID`、审计日志脱敏为 `CE****26`/`WO****88` | 无
