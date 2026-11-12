@@ -90,7 +90,7 @@ async function main() {
     if (setCookie) {
       cookie = setCookie.split(';')[0];
     }
-    return { status: response.status, data, text, setCookie };
+    return { status: response.status, data, text, setCookie, headers: response.headers };
   }
 
   try {
@@ -98,6 +98,12 @@ async function main() {
     const page = await http('GET', '/admin');
     ok('GET /admin 返回 200', page.status === 200);
     ok('页面包含后目标题', page.text.includes('站长后台'));
+    // 回归：自定义生成 UI 必须在 DOM 里（曾出现站长手机看不到输入框的反馈）
+    ok('页面含自定义卡密输入框', page.text.includes('id="customCodeInput"'));
+    ok('页面含自定义生成按钮', page.text.includes('id="customGenBtn"'));
+    ok('说明文案指向 vip_codes.custom.json', page.text.includes('vip_codes.custom.json'));
+    ok('后台静态资源带版本号', /admin\.(js|css)\?v=/.test(page.text));
+    ok('后台页面禁止缓存', /no-store/.test(page.headers.get('cache-control') || ''));
 
     const guestState = await http('GET', '/api/admin/state');
     ok('未登录读卡密被拒 401', guestState.status === 401 && guestState.data.code === 'UNAUTHORIZED');

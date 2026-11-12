@@ -190,7 +190,10 @@ function createArenaServer(options = {}) {
   app.use('/api/admin', express.json({ limit: '16kb' }));
 
   app.get('/admin', (req, res) => {
-    res.setHeader('Cache-Control', 'no-store');
+    // 三重禁缓存：部分手机浏览器/代理对 no-store 处理不一致，旧版后台页面会一直显示旧 UI。
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
     res.setHeader('X-Robots-Tag', 'noindex, nofollow');
     res.sendFile(adminHtml);
   });
@@ -198,7 +201,9 @@ function createArenaServer(options = {}) {
   // 后台资源必须禁缓存：否则改了后台脚本，站长手机还会跑旧版本。
   for (const [route, file] of Object.entries(adminAssets)) {
     app.get(route, (req, res) => {
-      res.setHeader('Cache-Control', 'no-store');
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
       res.setHeader('X-Robots-Tag', 'noindex, nofollow');
       res.sendFile(file);
     });

@@ -9,7 +9,7 @@
     device: 'cetArena.deviceToken.v1',
     announcement: 'cetArena.announcementSeen.v1',
   };
-  const APP_VERSION = '20261112-vip13';
+  const APP_VERSION = '20261112-vip14';
 
   const VIEW_IDS = ['loading', 'home', 'room', 'game', 'result', 'solo', 'levels', 'trial'];
 
@@ -402,10 +402,8 @@
     const date = new Date(iso);
     if (Number.isNaN(date.getTime())) return '';
     const pad = (value) => String(value).padStart(2, '0');
-    return (
-      `更新于 ${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ` +
-      `${pad(date.getHours())}:${pad(date.getMinutes())}`
-    );
+    // 只显示日期，不显示到分钟（公告时间粒度到天即可）
+    return `更新于 ${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
   }
 
   // ---------------------------------------------------------------
