@@ -25,6 +25,10 @@ const MIN_LEVEL_WORDS = 4;
 // 免费关卡合集必须撑得起竞速，否则「免费能玩竞速」就是空话。
 const MIN_FREE_WORDS = 25;
 
+// 限时闯关：第 1/2/3 关每题限时（毫秒）。关卡越往后越紧。
+const TRIAL_TIME_LIMITS_MS = [10_000, 7_000, 5_000];
+const DEFAULT_TIME_LIMIT_MS = TRIAL_TIME_LIMITS_MS[0];
+
 /** 读取关卡配置（只解析，不校验）。 */
 function loadLevels(filePath = LEVELS_PATH) {
   let raw;
@@ -165,12 +169,20 @@ function createLevelStore(options = {}) {
 
   /** 免费体验可用的关卡清单（给前端渲染用，不含词条 id）。 */
   function listLevels() {
-    return levels.map((level) => ({
+    return levels.map((level, index) => ({
       id: level.id,
       title: level.title,
       free: level.free,
       wordCount: level.words.length,
+      timeLimitMs: TRIAL_TIME_LIMITS_MS[index] || DEFAULT_TIME_LIMIT_MS,
     }));
+  }
+
+  /** 某一关每题的限时（毫秒）。序号或关卡 id 都行。 */
+  function timeLimitFor(chapter) {
+    const level = findLevel(chapter);
+    const index = levels.indexOf(level);
+    return TRIAL_TIME_LIMITS_MS[index] || DEFAULT_TIME_LIMIT_MS;
   }
 
   /** 所有免费关卡合并去重后的题池，用于「免费能玩哪些词」的统一校验。 */
@@ -187,6 +199,7 @@ function createLevelStore(options = {}) {
     levelsPath,
     trialPoolFor,
     listLevels,
+    timeLimitFor,
     freePool,
     findLevel,
   };
@@ -207,13 +220,20 @@ function listLevels() {
   return defaultLevelStore().listLevels();
 }
 
+function timeLimitFor(chapter) {
+  return defaultLevelStore().timeLimitFor(chapter);
+}
+
 module.exports = {
   LEVELS_PATH,
   MIN_LEVEL_WORDS,
   MIN_FREE_WORDS,
+  TRIAL_TIME_LIMITS_MS,
+  DEFAULT_TIME_LIMIT_MS,
   loadLevels,
   validateLevels,
   createLevelStore,
   trialPoolFor,
   listLevels,
+  timeLimitFor,
 };

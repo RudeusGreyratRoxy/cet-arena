@@ -111,6 +111,17 @@
 
             <div class="divider"><span>或者一个人练</span></div>
 
+            <button class="btn btn-challenge btn-trial" id="trialEntryBtn" type="button">
+              <span class="challenge-main">
+                <span class="challenge-title">限时闯关</span>
+                <small id="trialEntryHint" class="challenge-sub">第 1–3 关 · 免费体验</small>
+              </span>
+              <span class="challenge-count" id="trialEntryCount" aria-label="可玩关卡数">3</span>
+            </button>
+            <p class="hint" id="trialEntryTip">
+              每题限时：第 1 关 10 秒、第 2 关 7 秒、第 3 关 5 秒，超时自动判错。
+            </p>
+
             <button class="btn btn-challenge" id="wrongChallengeBtn" type="button">
               <span class="challenge-main">
                 <span class="challenge-title">错词挑战</span>
@@ -308,6 +319,78 @@
           <div class="solo-summary-actions">
             <button class="btn btn-primary" id="soloAgainBtn" type="button">再来一轮</button>
             <button class="btn btn-ghost" id="soloHomeBtn" type="button">返回首页</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="view levels-view" id="view-levels" aria-label="限时闯关关卡" hidden>
+        <div class="solo-head">
+          <div>
+            <p class="eyebrow">LEVEL CHALLENGE</p>
+            <h2>限时闯关</h2>
+          </div>
+          <button class="btn btn-small btn-ghost" id="levelsBackBtn" type="button">
+            返回首页
+          </button>
+        </div>
+
+        <p class="levels-sub">
+          前 3 关免费体验，题目全部来自固定关卡词库；每题限时，超时由服务端判定为答错。
+        </p>
+
+        <div class="level-grid" id="levelGrid"></div>
+      </section>
+
+      <section class="view trial-view" id="view-trial" aria-label="限时闯关答题" hidden>
+        <div class="solo-head">
+          <div>
+            <p class="eyebrow">LEVEL <span id="trialLevelTag">1</span> · TIMED</p>
+            <h2 id="trialTitle">第 1 关</h2>
+          </div>
+          <button class="btn btn-small btn-ghost" id="trialExitBtn" type="button">
+            退出闯关
+          </button>
+        </div>
+
+        <div class="solo-stats" aria-live="polite">
+          <div class="solo-stat"><strong id="trialProgress">0 / 0</strong><span>题目进度</span></div>
+          <div class="solo-stat"><strong id="trialCorrect">0</strong><span>答对</span></div>
+          <div class="solo-stat"><strong id="trialTimer">10</strong><span>剩余秒数</span></div>
+        </div>
+
+        <div class="trial-timerbar" aria-hidden="true">
+          <span id="trialTimerBar"></span>
+        </div>
+
+        <div id="trialPlay">
+          <div class="question-card">
+            <p class="question-prompt" id="trialPrompt">选择正确的中文释义</p>
+            <h2 class="question-word" id="trialQuestionWord">
+              <span class="question-word-text" id="trialWordText">Loading</span>
+              <button
+                class="speak-btn"
+                id="trialSpeakBtn"
+                type="button"
+                aria-label="播放发音"
+                title="播放发音"
+                hidden
+              >
+                🔊
+              </button>
+            </h2>
+            <div class="options" id="trialOptions"></div>
+            <div class="answer-reveal" id="trialReveal" hidden aria-live="polite"></div>
+            <div class="feedback" id="trialFeedback" role="status" aria-live="polite"></div>
+          </div>
+        </div>
+
+        <div class="solo-summary" id="trialSummary" hidden>
+          <p class="eyebrow">LEVEL COMPLETE</p>
+          <h3 id="trialSummaryTitle">本关完成</h3>
+          <p class="solo-summary-copy" id="trialSummaryCopy"></p>
+          <div class="solo-summary-actions">
+            <button class="btn btn-primary" id="trialAgainBtn" type="button">再闯一次</button>
+            <button class="btn btn-ghost" id="trialLevelsBtn" type="button">返回关卡</button>
           </div>
         </div>
       </section>

@@ -130,9 +130,18 @@ function createEnv(options = {}) {
   const ackHandlers = new Map();
   const eventHandlers = new Map();
 
-  // 预置激活态：让「创建房间」直接可用（VIP 流程另有专门用例覆盖）
+  // 预置激活态：错词挑战已改为 VIP 专属，需要跑单人流程的用例默认带上激活态。
+  // 只写 localStorage 还不够——真正的 state.vip.verified 要走一次静默重验，
+  // 所以同时补一个默认的 vip:verify 成功应答（用例可以显式覆盖）。
   if (options.seedVip) {
     storageMap.set('cetArena.vip.v1', JSON.stringify({ code: options.seedVip }));
+    if (!options.acks || !options.acks['vip:verify']) {
+      ackHandlers.set('vip:verify', () => ({
+        ok: true,
+        kind: 'unlimited',
+        message: '验证成功',
+      }));
+    }
   }
   for (const [event, handler] of Object.entries(options.acks || {})) {
     ackHandlers.set(event, handler);
@@ -289,7 +298,8 @@ const flush = async (rounds = 6) => {
 
 async function scenarioEmptyBook() {
   console.log('=== 场景 1：错词本为空 ===');
-  const env = createEnv();
+  const env = createEnv({ seedVip: '080323' });
+  await flush();
   await flush();
 
   assert.equal(env.document.body.dataset.view, 'home', '应停留在首页');
@@ -310,7 +320,8 @@ async function scenarioEmptyBook() {
 
 async function scenarioMastery() {
   console.log('=== 场景 2：连对 3 次移出错词本 ===');
-  const env = createEnv();
+  const env = createEnv({ seedVip: '080323' });
+  await flush();
 
   // 预置一本只有 1 个词的错词本
   env.localStorage.setItem(
@@ -409,7 +420,8 @@ async function scenarioMastery() {
 
 async function scenarioWrongResetsStreak() {
   console.log('=== 场景 3：中途答错清零 ===');
-  const env = createEnv();
+  const env = createEnv({ seedVip: '080323' });
+  await flush();
   env.localStorage.setItem(
     'cetArena.wrongBook.v1',
     JSON.stringify({
@@ -466,7 +478,8 @@ async function scenarioWrongResetsStreak() {
 
 async function scenarioSoloListen() {
   console.log('=== 场景 5：单人听音题（自动发音 + 答后中文释义 + 着色） ===');
-  const env = createEnv({ speech: true });
+  const env = createEnv({ speech: true, seedVip: '080323' });
+  await flush();
   env.localStorage.setItem(
     'cetArena.wrongBook.v1',
     JSON.stringify({
@@ -601,7 +614,8 @@ async function scenarioMultiplayerListen() {
 
 async function scenarioSoloWrongColoring() {
   console.log('=== 场景 7：单人答错时的着色 ===');
-  const env = createEnv();
+  const env = createEnv({ seedVip: '080323' });
+  await flush();
   env.localStorage.setItem(
     'cetArena.wrongBook.v1',
     JSON.stringify({
@@ -853,6 +867,51 @@ async function scenarioResultStoresMistakes() {
   console.log('  ✓ 只记录自己答错的词，并更新错词本数量');
 }
 
+async function scenarioFreeTierLock() {
+  console.log('=== 场景 10：免费用户锁错词本 + 闯关第 4 关占位 ===');
+  const env = createEnv();
+  await flush();
+
+  assert.equal(env.el('wrongBookCount').textContent, '—', '免费用户看不到错词数量');
+  assert(
+    env.el('wrongBookHint').textContent.includes('VIP 专属'),
+    '免费用户应看到「VIP 专属」提示'
+  );
+  assert(
+    env.el('wrongChallengeBtn').classList.contains('is-vip-locked'),
+    '错词挑战入口应带锁定样式'
+  );
+
+  env.el('wrongChallengeBtn')._fire('click');
+  await flush();
+  assert.equal(env.el('vipOverlay').hidden, false, '点击应弹出激活码遮罩');
+  assert.equal(env.document.body.dataset.view, 'home', '免费用户不应进入挑战页');
+  console.log('  ✓ 错词本入口锁定并引导激活');
+
+  env.ackHandlers.set('trial:levels', () => ({
+    ok: true,
+    levels: [
+      { id: 'L1', title: '第 1 关 · 基础闯关', free: true, wordCount: 50, timeLimitMs: 10000 },
+      { id: 'L2', title: '第 2 关 · 进阶闯关', free: true, wordCount: 50, timeLimitMs: 7000 },
+      { id: 'L3', title: '第 3 关 · 挑战闯关', free: true, wordCount: 50, timeLimitMs: 5000 },
+    ],
+  }));
+  env.el('trialEntryBtn')._fire('click');
+  await flush();
+
+  assert.equal(env.document.body.dataset.view, 'levels', '免费用户应能进入关卡列表');
+  const cards = env.el('levelGrid').children;
+  assert.equal(cards.length, 4, '3 个可玩关卡 + 1 个占位');
+  assert.equal(
+    cards[3].textContent,
+    '第 4 关及后续关卡（开发中...）',
+    '占位文案固定'
+  );
+  assert(cards[3].classList.contains('is-locked'), '占位卡片应有不可点击样式');
+  assert(!cards[3]._has('click'), '占位卡片不应绑定点击事件');
+  console.log('  ✓ 闯关列表可进，第 4 关为灰色占位');
+}
+
 (async () => {
   await scenarioEmptyBook();
   await scenarioMastery();
@@ -863,6 +922,7 @@ async function scenarioResultStoresMistakes() {
   await scenarioVipPaywall();
   await scenarioJoinNeedsCode();
   await scenarioResultStoresMistakes();
+  await scenarioFreeTierLock();
   console.log('');
   console.log('错词挑战前端集成测试全部通过。');
 })().catch((error) => {

@@ -2808,3 +2808,128 @@ a:focus-visible {
     padding: 18px 16px;
   }
 }
+
+/* ---------------------------------------------------------------
+   限时闯关（免费体验）
+   --------------------------------------------------------------- */
+#view-levels,
+#view-trial {
+  width: min(860px, 100%);
+  margin: 0 auto;
+}
+
+.btn-trial .challenge-count {
+  color: #0d1a05;
+  background: var(--accent);
+}
+
+.btn-challenge.is-vip-locked {
+  border-style: solid;
+  border-color: var(--line);
+  background: rgba(255, 255, 255, 0.02);
+  opacity: 0.78;
+}
+
+.btn-challenge.is-vip-locked .challenge-count {
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.06);
+  font-size: 11px;
+  letter-spacing: 0.02em;
+}
+
+.levels-sub {
+  margin: -6px 0 18px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.level-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  margin-bottom: 24px;
+}
+
+.level-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 108px;
+  padding: 16px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  color: var(--text);
+  background: rgba(169, 155, 255, 0.06);
+  cursor: pointer;
+  text-align: left;
+  transition: transform 0.16s ease, border-color 0.16s ease, background 0.16s ease;
+}
+
+.level-card:hover {
+  transform: translateY(-2px);
+  border-color: var(--accent);
+  background: rgba(201, 255, 99, 0.08);
+}
+
+.level-order {
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
+.level-title {
+  font-size: 16px;
+  font-weight: 800;
+}
+
+.level-meta {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.level-card.is-locked {
+  grid-column: 1 / -1;
+  min-height: 64px;
+  align-items: center;
+  justify-content: center;
+  border-style: dashed;
+  border-color: var(--line);
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.02);
+  cursor: not-allowed;
+  font-size: 13px;
+  text-align: center;
+}
+
+.level-card.is-locked:hover {
+  transform: none;
+  border-color: var(--line);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.trial-timerbar {
+  height: 6px;
+  margin-bottom: 18px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+
+.trial-timerbar span {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width 0.1s linear;
+}
+
+.trial-timerbar span.is-urgent {
+  background: #ff6b6b;
+}
+
+#trialTimer.is-urgent {
+  color: #ff6b6b;
+}

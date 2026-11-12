@@ -10,7 +10,7 @@
   };
   const APP_VERSION = '20261112-vip10';
 
-  const VIEW_IDS = ['loading', 'home', 'room', 'game', 'result', 'solo'];
+  const VIEW_IDS = ['loading', 'home', 'room', 'game', 'result', 'solo', 'levels', 'trial'];
   const LETTERS = ['A', 'B', 'C', 'D'];
 
   const el = {
@@ -47,6 +47,32 @@
     soloFeedback: document.getElementById('soloFeedback'),
     soloDots: document.getElementById('soloDots'),
     soloStreakValue: document.getElementById('soloStreakValue'),
+
+    // 限时闯关：首页入口 + 关卡选择 + 答题页
+    trialEntryBtn: document.getElementById('trialEntryBtn'),
+    trialEntryHint: document.getElementById('trialEntryHint'),
+    trialEntryCount: document.getElementById('trialEntryCount'),
+    levelGrid: document.getElementById('levelGrid'),
+    levelsBackBtn: document.getElementById('levelsBackBtn'),
+    trialTitle: document.getElementById('trialTitle'),
+    trialLevelTag: document.getElementById('trialLevelTag'),
+    trialProgress: document.getElementById('trialProgress'),
+    trialCorrect: document.getElementById('trialCorrect'),
+    trialTimer: document.getElementById('trialTimer'),
+    trialTimerBar: document.getElementById('trialTimerBar'),
+    trialPrompt: document.getElementById('trialPrompt'),
+    trialQuestionWord: document.getElementById('trialQuestionWord'),
+    trialWordText: document.getElementById('trialWordText'),
+    trialSpeakBtn: document.getElementById('trialSpeakBtn'),
+    trialOptions: document.getElementById('trialOptions'),
+    trialReveal: document.getElementById('trialReveal'),
+    trialFeedback: document.getElementById('trialFeedback'),
+    trialSummary: document.getElementById('trialSummary'),
+    trialSummaryTitle: document.getElementById('trialSummaryTitle'),
+    trialSummaryCopy: document.getElementById('trialSummaryCopy'),
+    trialAgainBtn: document.getElementById('trialAgainBtn'),
+    trialLevelsBtn: document.getElementById('trialLevelsBtn'),
+    trialExitBtn: document.getElementById('trialExitBtn'),
     lobbyCode: document.getElementById('lobbyCode'),
     roomLevelBadge: document.getElementById('roomLevelBadge'),
     shareCode: document.getElementById('shareCode'),
@@ -171,6 +197,20 @@
       code: '',
       pending: null,
     },
+    trial: {
+      active: false,
+      levels: [],
+      chapter: null,
+      title: '',
+      total: 0,
+      correct: 0,
+      current: null,
+      deadline: 0,
+      serverOffset: 0,
+      limitMs: 0,
+      busy: false,
+      timer: null,
+    },
   };
 
   init();
@@ -238,6 +278,17 @@
     el.soloHomeBtn.addEventListener('click', () => setView('home'));
     el.soloSpeakBtn.addEventListener('click', handleSpeakTrigger);
     el.soloSpeakBtn.addEventListener('touchend', handleSpeakTrigger);
+
+    el.trialEntryBtn.addEventListener('click', openLevels);
+    el.levelsBackBtn.addEventListener('click', () => setView('home'));
+    el.trialExitBtn.addEventListener('click', exitTrial);
+    el.trialLevelsBtn.addEventListener('click', openLevels);
+    el.trialAgainBtn.addEventListener('click', () => {
+      if (state.trial.chapter) startTrial(state.trial.chapter);
+      else openLevels();
+    });
+    el.trialSpeakBtn.addEventListener('click', handleSpeakTrigger);
+    el.trialSpeakBtn.addEventListener('touchend', handleSpeakTrigger);
 
     // VIP 遮罩（激活码 / 套餐）
     el.vipVerifyBtn.addEventListener('click', submitVipCode);
@@ -329,6 +380,13 @@
         showToast('连接断开，错词挑战已暂停，进度已保存', 'error');
         setView('home');
         refreshWrongBookUi();
+      }
+      if (state.trial.active) {
+        state.trial.active = false;
+        state.trial.current = null;
+        stopTrialTimer();
+        showToast('连接断开，闯关已中断，请重新开始', 'error');
+        setView('home');
       }
       if (state.room) {
         el.reconnectBanner.hidden = false;
@@ -567,6 +625,7 @@
       JSON.stringify({ code, verifiedAt: new Date().toISOString() })
     );
     updateVipUi();
+    refreshWrongBookUi();
   }
 
   function clearVip() {
@@ -578,6 +637,7 @@
       /* 隐私模式忽略 */
     }
     updateVipUi();
+    refreshWrongBookUi();
   }
 
   /** 首页「清除激活状态」按钮只在已激活时出现。 */
@@ -605,9 +665,10 @@
     return { ok: true };
   }
 
-  /** mode: 'create' 建房 / 'join' 加入，验证成功后回到对应动作。 */
+  /** mode: 'create' 建房 / 'join' 加入 / 'wrong' 错词挑战，验证成功后回到对应动作。 */
   function openVipModal(mode) {
-    state.vip.pending = mode === 'join' ? 'join' : 'create';
+    state.vip.pending =
+      mode === 'join' ? 'join' : mode === 'wrong' ? 'wrong' : 'create';
     el.vipOverlay.hidden = false;
     showVipStep('code');
     showVipError('');
@@ -661,6 +722,7 @@
     showToast('激活成功，欢迎回来', 'success');
     if (pending === 'create') createRoom();
     else if (pending === 'join') joinRoom();
+    else if (pending === 'wrong') startWrongChallenge();
   }
 
   function showPayMaintenanceNotice() {
@@ -1423,7 +1485,8 @@
   function isGameplayView() {
     return state.currentView === 'room' ||
       state.currentView === 'game' ||
-      state.currentView === 'solo';
+      state.currentView === 'solo' ||
+      state.currentView === 'trial';
   }
 
   function updateAudioUnlockUi() {
@@ -2461,14 +2524,23 @@
     const api = wrongBookApi();
     const current = book || readWrongBook();
     const total = api ? api.count(current) : 0;
-    if (el.wrongBookCount) el.wrongBookCount.textContent = String(total);
+    // 错词本已改为 VIP 专属：免费用户看不到数量，入口显示为「VIP 专属」。
+    const locked = !state.vip.verified;
+
+    if (el.wrongBookCount) {
+      el.wrongBookCount.textContent = locked ? '—' : String(total);
+    }
     if (el.wrongBookHint) {
-      el.wrongBookHint.textContent = total
-        ? `错词本里还有 ${total} 个单词`
-        : '错词本为空';
+      el.wrongBookHint.textContent = locked
+        ? 'VIP 专属 · 激活后可用'
+        : total
+          ? `错词本里还有 ${total} 个单词`
+          : '错词本为空';
     }
     if (el.wrongChallengeBtn) {
-      el.wrongChallengeBtn.classList.toggle('is-empty', total === 0);
+      el.wrongChallengeBtn.classList.toggle('is-empty', !locked && total === 0);
+      el.wrongChallengeBtn.classList.toggle('is-vip-locked', locked);
+      el.wrongChallengeBtn.setAttribute('aria-disabled', String(locked));
     }
   }
 
@@ -2505,6 +2577,12 @@
   }
 
   async function startWrongChallenge() {
+    // 错词挑战是 VIP 专属：免费用户引导激活，而不是直接报错。
+    if (!state.vip.verified) {
+      showToast('错词挑战是 VIP 专属功能，激活后可解锁', 'info');
+      openVipModal('wrong');
+      return;
+    }
     const api = wrongBookApi();
     const book = readWrongBook();
     const total = api ? api.count(book) : 0;
@@ -2771,6 +2849,301 @@
     }
     el.soloStreakValue.textContent = `${streak} / 3`;
     el.soloStreakValue.classList.toggle('is-done', streak >= 3);
+  }
+
+  // ---------------------------------------------------------------
+  // 限时闯关（免费体验）：关卡选择 + 每题倒计时
+  // 倒计时只做展示与「到点自动提交」，真正的超时判定在服务端
+  // 按 deadline 复核，前端改时钟也无法骗分。
+  // ---------------------------------------------------------------
+  async function openLevels() {
+    setView('levels');
+    if (state.trial.levels.length === 0) {
+      const response = await request('trial:levels', {});
+      if (response.ok && Array.isArray(response.levels)) {
+        state.trial.levels = response.levels;
+      }
+    }
+    renderLevelGrid();
+  }
+
+  function renderLevelGrid() {
+    el.levelGrid.replaceChildren();
+
+    state.trial.levels.forEach((level, index) => {
+      const card = document.createElement('button');
+      card.type = 'button';
+      card.className = 'level-card';
+
+      const order = document.createElement('span');
+      order.className = 'level-order';
+      order.textContent = `第 ${index + 1} 关`;
+
+      const title = document.createElement('strong');
+      title.className = 'level-title';
+      title.textContent = level.title || `第 ${index + 1} 关`;
+
+      const meta = document.createElement('span');
+      meta.className = 'level-meta';
+      meta.textContent = `${level.wordCount} 词 · 每题 ${Math.round(
+        (level.timeLimitMs || 10000) / 1000
+      )} 秒`;
+
+      card.append(order, title, meta);
+      card.addEventListener('click', () => startTrial(level.id));
+      el.levelGrid.append(card);
+    });
+
+    // 第 4 关及后续：固定占位，不可点击（开发中）。
+    const placeholder = document.createElement('div');
+    placeholder.className = 'level-card';
+    placeholder.classList.add('is-locked');
+    placeholder.setAttribute('aria-disabled', 'true');
+    placeholder.textContent = '第 4 关及后续关卡（开发中...）';
+    el.levelGrid.append(placeholder);
+  }
+
+  async function startTrial(chapter) {
+    if (!state.socket || !state.socket.connected) {
+      showToast('尚未连接服务器，请稍候再试', 'error');
+      return;
+    }
+    if (state.trial.active) stopTrialTimer();
+
+    const response = await request('trial:start', { chapter }, 10000);
+    if (!response.ok) {
+      showToast(response.error || '无法开始闯关', 'error');
+      return;
+    }
+
+    state.trial.active = true;
+    state.trial.chapter = response.chapter ? response.chapter.id : chapter;
+    state.trial.title = response.chapter ? response.chapter.title : '';
+    state.trial.total = response.total || 0;
+    state.trial.correct = 0;
+    state.trial.busy = false;
+    state.trial.current = response.question || null;
+
+    el.trialTitle.textContent = state.trial.title || '限时闯关';
+    el.trialLevelTag.textContent = String(state.trial.chapter || '').replace(/^L/i, '');
+    el.trialCorrect.textContent = '0';
+    el.trialProgress.textContent = `0 / ${state.trial.total}`;
+    el.trialSummary.hidden = true;
+    el.trialPlay.hidden = false;
+    setView('trial');
+
+    if (state.trial.current) renderTrialQuestion(state.trial.current);
+  }
+
+  function renderTrialQuestion(question) {
+    hideAnswerReveal(el.trialReveal);
+    const isListen = question.type === 'listen';
+    const isZh2en = question.type === 'zh2en';
+
+    el.trialPrompt.textContent =
+      question.promptLabel ||
+      (isListen ? '点击喇叭听发音，选择正确的英文单词' : '选择正确的中文释义');
+    el.trialQuestionWord.classList.toggle('is-cn-prompt', isZh2en);
+    el.trialQuestionWord.classList.toggle('is-listen', isListen);
+    el.trialWordText.textContent = isListen
+      ? ''
+      : question.prompt || question.word || '';
+    state.speechWord = isListen || question.type === 'en2zh' ? question.word : '';
+    el.trialSpeakBtn.hidden = !state.speechWord;
+    if (state.speechWord) preloadWord(state.speechWord);
+
+    el.trialOptions.replaceChildren();
+    question.options.forEach((text, index) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'option';
+      button.dataset.index = String(index);
+
+      const key = document.createElement('span');
+      key.className = 'option-key';
+      key.textContent = LETTERS[index] || String(index + 1);
+
+      const label = document.createElement('span');
+      label.className = 'option-text';
+      label.textContent = text;
+
+      button.append(key, label);
+      button.addEventListener('click', () => answerTrial(index));
+      el.trialOptions.append(button);
+    });
+
+    el.trialProgress.textContent = `${question.index} / ${question.total}`;
+    el.trialCorrect.textContent = String(state.trial.correct);
+    setTrialFeedback('', '');
+
+    startTrialCountdown(question.deadline, question.serverNow, question.timeLimitMs);
+
+    if (isListen) {
+      scheduleAutoSpeak(question.word, () => state.trial.current === question);
+    }
+  }
+
+  function startTrialCountdown(deadline, serverNow, limitMs) {
+    stopTrialTimer();
+    if (!deadline) return;
+
+    const limit = limitMs > 0 ? limitMs : 10000;
+    state.trial.deadline = deadline;
+    state.trial.limitMs = limit;
+    state.trial.serverOffset =
+      (typeof serverNow === 'number' ? serverNow : Date.now()) - Date.now();
+
+    const tick = () => {
+      const remaining = Math.max(
+        0,
+        deadline - (Date.now() + state.trial.serverOffset)
+      );
+      const seconds = Math.ceil(remaining / 1000);
+      const ratio = Math.max(0, Math.min(100, (remaining / limit) * 100));
+      const urgent = remaining <= 3000;
+
+      el.trialTimer.textContent = String(seconds);
+      el.trialTimer.classList.toggle('is-urgent', urgent);
+      el.trialTimerBar.style.width = `${ratio}%`;
+      el.trialTimerBar.classList.toggle('is-urgent', urgent);
+
+      if (remaining <= 0) {
+        stopTrialTimer();
+        // 到点自动提交：服务端按 deadline 判为超时答错。
+        if (!state.trial.busy) answerTrial(null);
+      }
+    };
+
+    tick();
+    state.trial.timer = window.setInterval(tick, 100);
+  }
+
+  function stopTrialTimer() {
+    if (state.trial.timer) {
+      window.clearInterval(state.trial.timer);
+      state.trial.timer = null;
+    }
+  }
+
+  async function answerTrial(index) {
+    const trial = state.trial;
+    if (!trial.active || trial.busy || !trial.current) return;
+    trial.busy = true;
+    stopTrialTimer();
+
+    const question = trial.current;
+    [...el.trialOptions.children].forEach((button) => {
+      button.disabled = true;
+      button.classList.add('is-locked');
+    });
+
+    const response = await request('trial:answer', {
+      index: Number.isInteger(index) ? index : null,
+    });
+    if (!response.ok) {
+      trial.busy = false;
+      [...el.trialOptions.children].forEach((button) => {
+        button.disabled = false;
+        button.classList.remove('is-locked');
+      });
+      showToast(response.error || '提交失败，请重试', 'error');
+      return;
+    }
+
+    // 服务端只在作答后下发 correctIndex；缺字段时用正确答案文本兜底定位。
+    const correctIndex = Number.isInteger(response.correctIndex)
+      ? response.correctIndex
+      : question.options.indexOf(response.correctText);
+
+    [...el.trialOptions.children].forEach((button, optionIndex) => {
+      button.classList.add('is-locked');
+      if (optionIndex === correctIndex) {
+        button.classList.add('is-correct');
+      } else if (optionIndex === index) {
+        button.classList.add('is-wrong');
+      } else {
+        button.classList.add('is-dimmed');
+      }
+    });
+
+    if (question.type === 'listen') {
+      renderAnswerReveal(
+        el.trialReveal,
+        response.word || question.word,
+        response.meanings
+      );
+    }
+
+    if (response.correct) {
+      trial.correct += 1;
+      el.trialCorrect.textContent = String(trial.correct);
+      setTrialFeedback('✅ 答对了', 'correct');
+    } else {
+      setTrialFeedback(
+        response.timedOut
+          ? `⏰ 超时，正确答案是「${response.correctText}」`
+          : `❌ 答错了，正确答案是「${response.correctText}」`,
+        'wrong'
+      );
+    }
+
+    window.setTimeout(() => {
+      if (!state.trial.active) return;
+      nextTrialQuestion();
+    }, 1100);
+  }
+
+  async function nextTrialQuestion() {
+    if (!state.trial.active) return;
+    const response = await request('trial:next', {});
+    if (!state.trial.active) return;
+    if (!response.ok) {
+      showToast(response.error || '加载下一题失败', 'error');
+      return;
+    }
+    if (response.done) {
+      finishTrial(response.summary || {});
+      return;
+    }
+    state.trial.current = response.question;
+    state.trial.busy = false;
+    renderTrialQuestion(response.question);
+  }
+
+  function finishTrial(summary) {
+    stopTrialTimer();
+    state.trial.active = false;
+    state.trial.current = null;
+    stopSpeech();
+
+    const total = summary.total || state.trial.total || 0;
+    const correct = summary.correct || 0;
+    const wrong = Number.isInteger(summary.wrong) ? summary.wrong : total - correct;
+
+    el.trialPlay.hidden = true;
+    el.trialSummary.hidden = false;
+    el.trialSummaryTitle.textContent = summary.title
+      ? `${summary.title} 完成`
+      : '本关完成';
+    el.trialSummaryCopy.textContent =
+      `本关共 ${total} 题，答对 ${correct} 题，答错或超时 ${wrong} 题。`;
+  }
+
+  function exitTrial() {
+    stopTrialTimer();
+    const wasActive = state.trial.active;
+    state.trial.active = false;
+    state.trial.current = null;
+    stopSpeech();
+    if (wasActive && state.socket && state.socket.connected) {
+      state.socket.emit('trial:quit', {});
+    }
+    setView('levels');
+  }
+
+  function setTrialFeedback(text, kind) {
+    el.trialFeedback.textContent = text;
+    el.trialFeedback.className = `feedback${kind ? ` is-${kind}` : ''}`;
   }
 
   function startCountdown(deadline, serverNow) {

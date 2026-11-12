@@ -10,6 +10,7 @@ const { loadWords, buildQuestions, buildQuestion } = require('./wordBank');
 const { createVipStore } = require('./vipCodes');
 const { createAdminAuth } = require('./adminAuth');
 const { createMessageStore, MAX_CONTENT } = require('./messages');
+const { createLevelStore } = require('./levels');
 const { APP_VERSION } = require('./version');
 
 const DEFAULT_CONFIG = {
@@ -22,8 +23,11 @@ const DEFAULT_CONFIG = {
   // 双方都离线后，未结束的对局保留多久用于「刷新重连」；结束后立即回收。
   // 60 秒：移动端切后台会被系统挂起、弱网重连也更慢，10 秒太容易误杀。
   emptyRoomGraceMs: 60 * 1000,
-  // 创建房间需要先通过激活码验证（单人错词挑战不受限制）。
+  // 创建房间 / 加入房间 / 错词挑战都需要激活码；单人限时闯关对所有人开放。
   vipRequired: true,
+  // 单人限时闯关：每关固定抽多少题；超时判定给客户端留一点网络宽限。
+  trialQuestionCount: 10,
+  trialGraceMs: 300,
   cleanupIntervalMs: 60 * 1000,
   maxNicknameLength: 20,
 };
@@ -40,6 +44,7 @@ function createArenaServer(options = {}) {
   const wordByName = new Map(words.map((entry) => [entry.word.toLowerCase(), entry]));
   const vip = options.vip || createVipStore(options.vipOptions);
   const messages = options.messages || createMessageStore(options.messageOptions);
+  const levels = options.levels || createLevelStore({ words });
   const app = express();
   const httpServer = http.createServer(app);
   const io = new Server(httpServer, {
@@ -1039,6 +1044,15 @@ function createArenaServer(options = {}) {
     }
 
     on('solo:start', (payload, ack) => {
+      // 错词挑战为 VIP 专属：免费用户走「限时闯关」（trial:*）。
+      if (config.vipRequired && socket.data.vip !== true) {
+        ack({
+          ok: false,
+          error: '错词挑战是 VIP 专属功能，激活后可解锁',
+          code: 'VIP_REQUIRED',
+        });
+        return;
+      }
       const entries = soloEntriesFrom(payload);
       if (!entries.length) {
         ack({ ok: false, error: '错词本为空，先去打一局吧' });
@@ -1126,6 +1140,181 @@ function createArenaServer(options = {}) {
 
     on('solo:quit', (payload, ack) => {
       socket.data.solo = null;
+      ack({ ok: true });
+    });
+
+    // ===== 单人限时闯关（免费体验）=====
+    // 与「错词挑战」分开：题目由服务端按关卡词池生成，客户端只能提交选项。
+    // 超时判定以服务端 deadline 为准，前端倒计时只负责展示与到点自动提交。
+
+    function trialTimeLimit(levelIndex, levelId) {
+      const custom = config.trialTimeLimitsMs;
+      if (
+        Array.isArray(custom) &&
+        Number.isInteger(levelIndex) &&
+        custom[levelIndex] > 0
+      ) {
+        return custom[levelIndex];
+      }
+      return levels.timeLimitFor(levelId);
+    }
+
+    function trialQuestionPayload(trial) {
+      const question = trial.current;
+      return {
+        index: trial.index + 1,
+        total: trial.questions.length,
+        id: question.id,
+        word: question.word,
+        level: question.level,
+        type: question.type,
+        prompt: question.prompt,
+        promptLabel: question.promptLabel,
+        options: question.options,
+        timeLimitMs: trial.timeLimitMs,
+        deadline: trial.deadline,
+        serverNow: Date.now(),
+      };
+    }
+
+    function armTrialQuestion(trial) {
+      trial.current = trial.questions[trial.index];
+      trial.deadline = Date.now() + trial.timeLimitMs;
+      trial.answered = false;
+    }
+
+    on('trial:levels', (payload, ack) => {
+      ack({ ok: true, levels: levels.listLevels() });
+    });
+
+    on('trial:start', (payload, ack) => {
+      const requested = payload && payload.chapter;
+      let target;
+      let levelIndex;
+      try {
+        target = levels.findLevel(requested);
+        levelIndex = levels.listLevels().findIndex((item) => item.id === target.id);
+      } catch (error) {
+        ack({ ok: false, error: error.message });
+        return;
+      }
+      // 目前三关全部 free；将来若出现付费关，这里就是权限闸门。
+      if (!target.free && socket.data.vip !== true) {
+        ack({ ok: false, error: '该关卡为 VIP 专属', code: 'VIP_REQUIRED' });
+        return;
+      }
+
+      const pool = levels.trialPoolFor(target.id);
+      const count = Math.min(config.trialQuestionCount, pool.length);
+      let questions;
+      try {
+        questions = buildQuestions(pool, count, 'CET4');
+      } catch (error) {
+        console.error('[trial:start]', error);
+        ack({ ok: false, error: `第 ${target.id} 关词库不足或损坏` });
+        return;
+      }
+
+      const trial = {
+        levelId: target.id,
+        title: target.title,
+        questions,
+        index: 0,
+        correct: 0,
+        timeLimitMs: trialTimeLimit(levelIndex, target.id),
+        deadline: 0,
+        current: null,
+        answered: false,
+      };
+      armTrialQuestion(trial);
+      socket.data.trial = trial;
+
+      audit('trial_start', {
+        level: target.id,
+        total: questions.length,
+        timeLimitMs: trial.timeLimitMs,
+      });
+      ack({
+        ok: true,
+        chapter: { id: target.id, title: target.title },
+        total: questions.length,
+        timeLimitMs: trial.timeLimitMs,
+        question: trialQuestionPayload(trial),
+      });
+    });
+
+    on('trial:answer', (payload, ack) => {
+      const trial = socket.data.trial;
+      if (!trial || !trial.current) {
+        ack({ ok: false, error: '请先开始闯关' });
+        return;
+      }
+      if (trial.answered) {
+        ack({ ok: false, error: '本题已作答' });
+        return;
+      }
+
+      const index = payload && Number.isInteger(payload.index) ? payload.index : null;
+      // 客户端到点会自动提交 index=null；服务端仍以 deadline 复核，
+      // 迟到的答案一律按超时处理，避免前端改时钟作弊。
+      const late = Date.now() > trial.deadline + config.trialGraceMs;
+      const timedOut = index === null || late;
+
+      let correct = false;
+      if (!timedOut) {
+        if (index < 0 || index >= trial.current.options.length) {
+          ack({ ok: false, error: '选项无效' });
+          return;
+        }
+        correct = index === trial.current.correctIndex;
+      }
+
+      trial.answered = true;
+      if (correct) trial.correct += 1;
+
+      ack({
+        ok: true,
+        correct,
+        timedOut,
+        correctIndex: trial.current.correctIndex,
+        correctText: trial.current.correctText,
+        word: trial.current.word,
+        type: trial.current.type,
+        meanings: trial.current.meanings,
+      });
+    });
+
+    on('trial:next', (payload, ack) => {
+      const trial = socket.data.trial;
+      if (!trial) {
+        ack({ ok: false, error: '请先开始闯关' });
+        return;
+      }
+      // 未作答就请求下一题：记为错误（跳过），不给分。
+      if (trial.current && !trial.answered) {
+        trial.answered = true;
+      }
+
+      trial.index += 1;
+      if (trial.index >= trial.questions.length) {
+        const summary = {
+          chapter: trial.levelId,
+          title: trial.title,
+          total: trial.questions.length,
+          correct: trial.correct,
+          wrong: trial.questions.length - trial.correct,
+        };
+        socket.data.trial = null;
+        ack({ ok: true, done: true, summary });
+        return;
+      }
+
+      armTrialQuestion(trial);
+      ack({ ok: true, done: false, question: trialQuestionPayload(trial) });
+    });
+
+    on('trial:quit', (payload, ack) => {
+      socket.data.trial = null;
       ack({ ok: true });
     });
 

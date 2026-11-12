@@ -60,6 +60,15 @@ async function main() {
     console.log('  ✓ ' + label);
   };
 
+  console.log('=== 0. 错词挑战已改为 VIP 专属 ===');
+  const freeSolo = await call(socket, 'solo:start', { words: ['abandon'] });
+  ok(
+    '免费用户无法开始',
+    freeSolo.ok === false && freeSolo.code === 'VIP_REQUIRED'
+  );
+  const activated = await call(socket, 'vip:verify', { code: 'BOSS888' });
+  ok('站长码开通成功', activated.ok === true);
+
   console.log('=== 1. 启动校验 ===');
   const empty = await call(socket, 'solo:start', { words: [] });
   ok('空列表无法开始', empty.ok === false);
