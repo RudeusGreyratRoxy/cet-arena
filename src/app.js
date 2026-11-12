@@ -8,6 +8,7 @@ const compression = require('compression');
 const { Server } = require('socket.io');
 const { loadWords, buildQuestions, buildQuestion } = require('./wordBank');
 const { createVipStore } = require('./vipCodes');
+const { createAdminAuth } = require('./adminAuth');
 const { APP_VERSION } = require('./version');
 
 const DEFAULT_CONFIG = {
@@ -94,10 +95,164 @@ function createArenaServer(options = {}) {
 
   const publicDir = path.join(__dirname, '..', 'public');
   const indexFile = path.join(publicDir, 'index.html');
+
+  // ------------------------------------------------------------------
+  // 站长后台：/admin 页面 + /api/admin/* 管理接口
+  // 所有会改动卡密的接口都必须先通过站长密码校验。
+  // ------------------------------------------------------------------
+  const adminAuth = options.adminAuth || createAdminAuth({ password: options.adminPassword });
+  const adminHtml = path.join(publicDir, 'admin.html');
+  const adminAssets = {
+    '/admin.js': path.join(publicDir, 'admin.js'),
+    '/admin.css': path.join(publicDir, 'admin.css'),
+  };
+  const ADMIN_COOKIE = 'cet_admin';
+
   app.get('/', (req, res) => {
     res.setHeader('Cache-Control', 'no-cache');
     res.sendFile(indexFile);
   });
+
+  function httpIp(req) {
+    const forwarded = req.headers['x-forwarded-for'];
+    const raw = (Array.isArray(forwarded) ? forwarded[0] : forwarded) || req.socket?.remoteAddress || '';
+    return String(raw).split(',')[0].trim().replace(/^::ffff:/, '');
+  }
+
+  function readCookie(req, name) {
+    const header = req.headers.cookie;
+    if (!header) return '';
+    for (const part of String(header).split(';')) {
+      const index = part.indexOf('=');
+      if (index === -1) continue;
+      if (part.slice(0, index).trim() === name) {
+        return decodeURIComponent(part.slice(index + 1).trim());
+      }
+    }
+    return '';
+  }
+
+  function setAdminCookie(req, res, token, maxAgeSeconds) {
+    const pieces = [
+      `${ADMIN_COOKIE}=${encodeURIComponent(token)}`,
+      'Path=/',
+      'HttpOnly',
+      'SameSite=Strict',
+      `Max-Age=${maxAgeSeconds}`,
+    ];
+    if (req.secure) pieces.push('Secure');
+    res.setHeader('Set-Cookie', pieces.join('; '));
+  }
+
+  function isAdmin(req) {
+    return adminAuth.check(readCookie(req, ADMIN_COOKIE));
+  }
+
+  function requireAdmin(req, res, next) {
+    if (isAdmin(req)) {
+      next();
+      return;
+    }
+    res.status(401).json({ ok: false, code: 'UNAUTHORIZED', message: '请先登录站长后台' });
+  }
+
+  app.use('/api/admin', express.json({ limit: '16kb' }));
+
+  app.get('/admin', (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('X-Robots-Tag', 'noindex, nofollow');
+    res.sendFile(adminHtml);
+  });
+
+  // 后台资源必须禁缓存：否则改了后台脚本，站长手机还会跑旧版本。
+  for (const [route, file] of Object.entries(adminAssets)) {
+    app.get(route, (req, res) => {
+      res.setHeader('Cache-Control', 'no-store');
+      res.setHeader('X-Robots-Tag', 'noindex, nofollow');
+      res.sendFile(file);
+    });
+  }
+
+  app.post('/api/admin/login', (req, res) => {
+    const body = req.body || {};
+    const ip = httpIp(req);
+    const result = adminAuth.login(body.password, ip);
+    audit('admin_login', { ip, ok: result.ok, code: result.code || null });
+    if (!result.ok) {
+      res.status(result.code === 'LOCKED' ? 429 : 401).json(result);
+      return;
+    }
+    setAdminCookie(req, res, result.token, Math.floor(adminAuth.ttlMs / 1000));
+    res.json({ ok: true, expiresAt: result.expiresAt });
+  });
+
+  app.post('/api/admin/logout', (req, res) => {
+    adminAuth.logout(readCookie(req, ADMIN_COOKIE));
+    setAdminCookie(req, res, '', 0);
+    res.json({ ok: true });
+  });
+
+  app.get('/api/admin/session', (req, res) => {
+    // 只回答「是否已登录」，不泄露任何卡密信息，供后台首屏静默探测登录态。
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({ ok: true, authed: isAdmin(req) });
+  });
+
+  app.get('/api/admin/state', (req, res) => {
+    if (!isAdmin(req)) {
+      res.status(401).json({ ok: false, code: 'UNAUTHORIZED', message: '请先登录站长后台' });
+      return;
+    }
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({
+      ok: true,
+      codes: vip.list(),
+      stats: vip.stats(),
+      live: {
+        rooms: rooms.size,
+        players: [...rooms.values()].reduce((sum, room) => sum + room.players.length, 0),
+      },
+    });
+  });
+
+  app.post('/api/admin/codes/reset', requireAdmin, (req, res) => {
+    const body = req.body || {};
+    const result = vip.reset(body.code);
+    audit('admin_reset_code', {
+      ip: httpIp(req),
+      code: String(body.code || '').toUpperCase(),
+      ok: result.ok,
+      code4: result.code || null,
+    });
+    if (!result.ok) {
+      res.status(400).json(result);
+      return;
+    }
+    res.json({ ok: true, message: result.message, code: result.record, stats: vip.stats() });
+  });
+
+  app.post('/api/admin/codes/generate', requireAdmin, (req, res) => {
+    const body = req.body || {};
+    const result = vip.generate(body.count, { label: body.label });
+    audit('admin_generate_codes', {
+      ip: httpIp(req),
+      requested: Number(body.count) || 0,
+      created: result.created ? result.created.length : 0,
+      ok: result.ok,
+    });
+    if (!result.ok) {
+      res.status(400).json(result);
+      return;
+    }
+    res.json({
+      ok: true,
+      created: result.created,
+      message: result.message,
+      codes: vip.list(),
+      stats: vip.stats(),
+    });
+  });
+
   app.use(
     express.static(publicDir, {
       index: false,
@@ -1632,7 +1787,7 @@ function createArenaServer(options = {}) {
     });
   }
 
-  return { app, httpServer, io, rooms, sessions, config, close };
+  return { app, httpServer, io, rooms, sessions, config, adminAuth, vip, close };
 }
 
 module.exports = { createArenaServer, DEFAULT_CONFIG, SESSION_MISSING };

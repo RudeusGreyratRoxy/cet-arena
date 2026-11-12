@@ -18,10 +18,14 @@
  * 运行状态在 data/vip_codes.state.json（不入库），先写临时文件再 rename，保证原子性。
  */
 
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 
-const DEFAULT_SEED = { version: 1, codes: {} };
+// 生成新卡密用的字符集：去掉 I / O / 0 / 1 等易混淆字符，方便客户手输。
+const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+const CODE_LENGTH = 6;
+const MAX_GENERATE = 100;
 
 function readJson(file, fallback) {
   try {
@@ -54,8 +58,10 @@ function createVipStore(options = {}) {
   const statePath = options.statePath || path.join(dataDir, 'vip_codes.state.json');
   const now = options.now || (() => new Date());
 
-  const seed = readJson(seedPath, DEFAULT_SEED);
-  const codes = seed && seed.codes && typeof seed.codes === 'object' ? seed.codes : {};
+  // 每次启动重新读一次种子文件；对象常驻内存，新生成的卡密无需重启即可验证。
+  const seed = readJson(seedPath, null) || { version: 1, codes: {} };
+  if (!seed.codes || typeof seed.codes !== 'object') seed.codes = {};
+  const codes = seed.codes;
 
   let state = readJson(statePath, {});
   if (!state || typeof state !== 'object') state = {};
@@ -129,7 +135,77 @@ function createVipStore(options = {}) {
     return Object.keys(codes).map(describe).filter(Boolean);
   }
 
-  return { verify, list, describe, seedPath, statePath };
+  /** 汇总给后台用的统计。 */
+  function stats() {
+    const all = list();
+    const once = all.filter((entry) => entry.kind !== 'unlimited');
+    return {
+      total: all.length,
+      unlimited: all.length - once.length,
+      available: once.filter((entry) => entry.status !== 'used').length,
+      used: once.filter((entry) => entry.status === 'used').length,
+    };
+  }
+
+  /**
+   * 解绑：清掉该卡密在 state 里的使用记录，让它可以重新在任意 IP 激活。
+   * 站长码不使用绑定状态，直接拒绝，避免前端把它当成可解绑对象。
+   */
+  function reset(rawCode) {
+    const code = normalizeCode(rawCode);
+    if (!has(code)) {
+      return { ok: false, code: 'INVALID', message: '该卡密不存在' };
+    }
+    if (normalizeType(codes[code].type) === 'unlimited') {
+      return { ok: false, code: 'UNLIMITED', message: '站长码不绑定设备，无需解绑' };
+    }
+    if (!state[code]) {
+      return { ok: false, code: 'NOT_BOUND', message: '该卡密尚未使用，无需解绑' };
+    }
+
+    delete state[code];
+    writeJsonAtomic(statePath, state);
+    return { ok: true, message: '已解绑，可重新激活', record: describe(code) };
+  }
+
+  /**
+   * 批量生成普通码：写回 vip_codes.json（入库），同时立刻进内存，
+   * 所以新码无需重启服务就能被 / 客户端验证使用。
+   */
+  function generate(rawCount, options = {}) {
+    const count = Math.floor(Number(rawCount));
+    if (!Number.isFinite(count) || count < 1) {
+      return { ok: false, code: 'BAD_COUNT', message: '请输入 1 以上的生成数量' };
+    }
+    if (count > MAX_GENERATE) {
+      return { ok: false, code: 'TOO_MANY', message: `一次最多生成 ${MAX_GENERATE} 张` };
+    }
+
+    const label = options.label || '批量生成';
+    const created = [];
+    // 撞码概率极低，但保留上限，避免随机源异常时死循环。
+    const guardLimit = count * 200 + 1000;
+    let guard = 0;
+    while (created.length < count && guard < guardLimit) {
+      guard += 1;
+      let candidate = '';
+      for (let i = 0; i < CODE_LENGTH; i += 1) {
+        candidate += CODE_ALPHABET[crypto.randomInt(CODE_ALPHABET.length)];
+      }
+      if (has(candidate)) continue;
+      codes[candidate] = { type: 'once', label };
+      created.push(candidate);
+    }
+
+    if (created.length === 0) {
+      return { ok: false, code: 'GENERATE_FAILED', message: '生成失败，请重试' };
+    }
+
+    writeJsonAtomic(seedPath, seed);
+    return { ok: true, created, message: `已生成 ${created.length} 张卡密` };
+  }
+
+  return { verify, list, describe, reset, generate, stats, seedPath, statePath };
 }
 
 module.exports = { createVipStore, normalizeCode, normalizeType };

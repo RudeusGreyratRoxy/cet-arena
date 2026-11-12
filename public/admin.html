@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="robots" content="noindex, nofollow">
+  <meta name="theme-color" content="#0f172a">
+  <title>站长后台 · CET Arena</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/admin.css">
+</head>
+
+<body>
+  <main class="shell">
+
+    <!-- ============ 登录 ============ -->
+    <section id="loginView" class="card login" hidden>
+      <h1 class="brand">站长后台</h1>
+      <p class="muted">CET Arena · 卡密管理</p>
+      <form id="loginForm" autocomplete="off" novalidate>
+        <label class="field">
+          <span>站长密码</span>
+          <input id="loginPassword" type="password" placeholder="请输入站长密码" autocomplete="current-password" required>
+        </label>
+        <button id="loginBtn" class="btn primary block" type="submit">进入后台</button>
+        <p id="loginError" class="error" role="alert"></p>
+      </form>
+    </section>
+
+    <!-- ============ 后台 ============ -->
+    <section id="adminView" hidden>
+      <header class="topbar">
+        <div>
+          <h1 class="brand">站长后台</h1>
+          <p class="muted small" id="liveLine">在线 0 人 · 0 个房间</p>
+        </div>
+        <button id="logoutBtn" class="btn ghost" type="button">退出</button>
+      </header>
+
+      <div class="stats">
+        <div class="stat">
+          <span class="stat-value" id="statTotal">0</span>
+          <span class="stat-label">卡密总数</span>
+        </div>
+        <div class="stat">
+          <span class="stat-value" id="statAvailable">0</span>
+          <span class="stat-label">未使用</span>
+        </div>
+        <div class="stat">
+          <span class="stat-value" id="statUsed">0</span>
+          <span class="stat-label">已绑定</span>
+        </div>
+        <div class="stat">
+          <span class="stat-value" id="statPlayers">0</span>
+          <span class="stat-label">在线玩家</span>
+        </div>
+      </div>
+
+      <section class="card">
+        <h2>生成新卡密</h2>
+        <p class="muted small">6 位大写字母 + 数字，自动去重并写入 vip_codes.json，立即可用。</p>
+        <div class="generate-row">
+          <label class="field grow">
+            <span>生成数量</span>
+            <input id="genCount" type="number" min="1" max="100" step="1" value="1" inputmode="numeric">
+          </label>
+          <button id="genBtn" class="btn primary" type="button">一键生成</button>
+        </div>
+        <div id="genResult" class="gen-result" hidden>
+          <div class="gen-result-head">
+            <span id="genMessage"></span>
+            <button id="copyGenBtn" class="btn tiny" type="button">复制全部</button>
+          </div>
+          <ul id="genList" class="gen-list"></ul>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="list-head">
+          <h2>卡密列表</h2>
+          <input id="searchInput" class="search" type="search" placeholder="搜索卡密 / IP" autocomplete="off">
+        </div>
+        <p id="tableHint" class="muted small"></p>
+        <div class="table-wrap">
+          <table class="codes">
+            <thead>
+              <tr>
+                <th>卡密</th>
+                <th>类型</th>
+                <th>状态</th>
+                <th>绑定 IP</th>
+                <th>绑定时间</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody id="codeRows"></tbody>
+          </table>
+        </div>
+        <p id="emptyHint" class="muted" hidden>没有匹配的卡密。</p>
+      </section>
+    </section>
+
+    <div id="toast" class="toast" hidden role="status"></div>
+  </main>
+
+  <script src="/admin.js" defer></script>
+</body>
+
+</html>
