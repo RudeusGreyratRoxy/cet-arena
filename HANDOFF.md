@@ -7,6 +7,7 @@
 > 强制格式（最新在最上）：`[YYYY-MM-DD HH:mm] 版本号 | 核心改动 | 遗留问题`
 > 每次任务结束**必须**在此节点顶部新增一行，无需用户提醒。
 
+- [2026-11-12 20:38] `20261112-vip11`（已上线） | 专属码已调整为易记安全组合（`CETWINNER2026` / `WORDMASTER888`，由环境变量 `VIP_UNLIMITED_CODES` 注入），上一组长串（`NEBULAORBIT27` / `QUARTZMEADOW88`）已失效；pm2 安全重启（pid 657327，↺19）并 `pm2 save`；线上实测新码 `kind=unlimited` 且免设备 Token、旧长串带/不带 Token 两路均 `INVALID`、审计日志脱敏为 `CE****26`/`WO****88` | 无
 - [2026-11-12 20:22] `20261112-vip11`（已上线） | 专属码已替换为随机长串（两个新码由 PM2 环境变量 `VIP_UNLIMITED_CODES` 注入，`ADMIN_PASSWORD` 同步保留），旧测试码 `TEXTCODE001` 已失效；pm2 安全重启（pid 653262，↺18）并 `pm2 save`；线上实测新码 `kind=unlimited` 且免设备 Token、旧码 `INVALID`、`vip_verify` 审计日志脱敏正常 | 无
 - [2026-11-12 19:52] `20261112-vip11`（已上线，专属码止血收尾完成） | 专属码止血改造已部署并完成真机验收：旧码（原两条站长码）已废弃、新码改由环境变量 `VIP_UNLIMITED_CODES` 注入并生效、`vip_verify` 审计日志已脱敏；服务器已同步文档 commit `7ed3ba3`，pm2 当前日志已 flush、历史归档已定向脱敏（明文旧码 0 命中） | 无（新码建议后续换成随机长串，当前为可猜的占位串）
 - [2026-11-12 19:23] `20261112-vip11`（版本不变｜**Phase A 本地完成，未部署**） | 专属码止血：`src/vipCodes.js` 支持环境变量 `VIP_UNLIMITED_CODES`（逗号分隔）注入 unlimited 码，JSON 同码优先不覆盖、为空仅 warn 不崩；`data/vip_codes.json` 移除两条 unlimited 种子（仅剩 9 条 once）；`src/app.js` 新增 `maskCode()`，`vip_verify` 审计日志改为首2+****+末2（<6 位全星）；`.gitignore` 补 `.env.production`；solo/trial 测试改用临时 env 码（`TESTBOSS1`） | Phase B 必须在 PM2 注入 `VIP_UNLIMITED_CODES` 再重启，否则线上将**没有任何站长码**（后台密码不受影响）
