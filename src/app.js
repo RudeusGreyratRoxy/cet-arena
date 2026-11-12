@@ -10,6 +10,7 @@ const { loadWords, buildQuestions, buildQuestion } = require('./wordBank');
 const { createVipStore } = require('./vipCodes');
 const { createAdminAuth } = require('./adminAuth');
 const { createMessageStore, MAX_CONTENT } = require('./messages');
+const { createAnnouncementStore } = require('./announcement');
 const { createLevelStore } = require('./levels');
 const { APP_VERSION } = require('./version');
 
@@ -57,6 +58,8 @@ function createArenaServer(options = {}) {
   const wordByName = new Map(words.map((entry) => [entry.word.toLowerCase(), entry]));
   const vip = options.vip || createVipStore(options.vipOptions);
   const messages = options.messages || createMessageStore(options.messageOptions);
+  const announcement =
+    options.announcementStore || createAnnouncementStore(options.announcementOptions);
   const levels = options.levels || createLevelStore({ words });
   const app = express();
   const httpServer = http.createServer(app);
@@ -112,6 +115,13 @@ function createArenaServer(options = {}) {
       version: APP_VERSION,
       uptimeSeconds: Math.round(process.uptime()),
     });
+  });
+
+  // 首页更新公告：公开只读。必须 no-store，否则浏览器/边缘缓存会让站长发了公告看不到。
+  app.get('/api/announcement', (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    const snapshot = announcement.get();
+    res.json({ ok: true, content: snapshot.content, updatedAt: snapshot.updatedAt });
   });
 
   const publicDir = path.join(__dirname, '..', 'public');
@@ -234,6 +244,7 @@ function createArenaServer(options = {}) {
         players: [...rooms.values()].reduce((sum, room) => sum + room.players.length, 0),
       },
       messages: messages.stats(),
+      announcement: announcement.get(),
     });
   });
 
@@ -273,6 +284,23 @@ function createArenaServer(options = {}) {
       codes: vip.list(),
       stats: vip.stats(),
     });
+  });
+
+  // ---- 公告管理（站长后台）----
+  // 审计只记长度与结果，**不记正文**：公告可能含内部信息。
+  app.post('/api/admin/announcement', requireAdmin, (req, res) => {
+    const body = req.body || {};
+    const result = announcement.set(body.content);
+    audit('admin_update_announcement', {
+      ip: httpIp(req),
+      length: typeof body.content === 'string' ? Array.from(body.content).length : 0,
+      ok: result.ok,
+    });
+    if (!result.ok) {
+      res.status(400).json(result);
+      return;
+    }
+    res.json({ ok: true, content: result.content, updatedAt: result.updatedAt });
   });
 
   // ---- 留言管理（站长后台）----

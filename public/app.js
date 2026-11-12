@@ -7,8 +7,9 @@
     nickname: 'cetArena.nickname',
     vip: 'cetArena.vip.v1',
     device: 'cetArena.deviceToken.v1',
+    announcement: 'cetArena.announcementSeen.v1',
   };
-  const APP_VERSION = '20261112-vip11';
+  const APP_VERSION = '20261112-vip12';
 
   const VIEW_IDS = ['loading', 'home', 'room', 'game', 'result', 'solo', 'levels', 'trial'];
   const LETTERS = ['A', 'B', 'C', 'D'];
@@ -75,6 +76,12 @@
     trialAgainBtn: document.getElementById('trialAgainBtn'),
     trialLevelsBtn: document.getElementById('trialLevelsBtn'),
     trialExitBtn: document.getElementById('trialExitBtn'),
+
+    // 首页更新公告（横幅）
+    announcementBanner: document.getElementById('announcementBanner'),
+    announcementText: document.getElementById('announcementText'),
+    announcementTime: document.getElementById('announcementTime'),
+    announcementClose: document.getElementById('announcementClose'),
     lobbyCode: document.getElementById('lobbyCode'),
     roomLevelBadge: document.getElementById('roomLevelBadge'),
     shareCode: document.getElementById('shareCode'),
@@ -249,6 +256,7 @@
       setView('home');
     }
     connectSocket();
+    loadAnnouncement();
   }
 
   function bindUiEvents() {
@@ -292,6 +300,8 @@
     el.trialSpeakBtn.addEventListener('click', handleSpeakTrigger);
     el.trialSpeakBtn.addEventListener('touchend', handleSpeakTrigger);
 
+    el.announcementClose.addEventListener('click', closeAnnouncement);
+
     // VIP 遮罩（激活码 / 套餐）
     el.vipVerifyBtn.addEventListener('click', submitVipCode);
     el.vipCodeInput.addEventListener('keydown', (event) => {
@@ -333,6 +343,53 @@
       once: true,
       passive: true,
     });
+  }
+
+  // ---------------------------------------------------------------
+  // 首页更新公告：按 updatedAt 去重（localStorage 记住已读版本）。
+  // 只允许 textContent 渲染，绝不拼 HTML；换行交给 CSS pre-wrap。
+  // ---------------------------------------------------------------
+  async function loadAnnouncement() {
+    if (typeof window.fetch !== 'function') return;
+    try {
+      const response = await fetch('/api/announcement', { cache: 'no-store' });
+      if (!response.ok) return;
+      renderAnnouncement(await response.json());
+    } catch (error) {
+      /* 公告拉不到不能影响首页可用 */
+    }
+  }
+
+  function renderAnnouncement(data) {
+    const content = data && typeof data.content === 'string' ? data.content : '';
+    const updatedAt = data && typeof data.updatedAt === 'string' ? data.updatedAt : '';
+    if (!content || !updatedAt) {
+      el.announcementBanner.hidden = true;
+      return;
+    }
+    // 这一版已经读过了，不再打扰
+    if (storageGet(STORAGE.announcement) === updatedAt) return;
+
+    el.announcementText.textContent = content;
+    el.announcementTime.textContent = formatAnnounceTime(updatedAt);
+    el.announcementBanner.dataset.updatedAt = updatedAt;
+    el.announcementBanner.hidden = false;
+  }
+
+  function closeAnnouncement() {
+    const updatedAt = el.announcementBanner.dataset.updatedAt || '';
+    if (updatedAt) storageSet(STORAGE.announcement, updatedAt);
+    el.announcementBanner.hidden = true;
+  }
+
+  function formatAnnounceTime(iso) {
+    const date = new Date(iso);
+    if (Number.isNaN(date.getTime())) return '';
+    const pad = (value) => String(value).padStart(2, '0');
+    return (
+      `更新于 ${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ` +
+      `${pad(date.getHours())}:${pad(date.getMinutes())}`
+    );
   }
 
   function connectSocket() {

@@ -43,6 +43,7 @@
         <button class="tab" id="tabMessages" data-tab="messages" role="tab" aria-selected="false" type="button">
           留言管理<span class="tab-badge" id="messageBadge" hidden>0</span>
         </button>
+        <button class="tab" id="tabAnnouncement" data-tab="announcement" role="tab" aria-selected="false" type="button">公告管理</button>
       </nav>
 
       <div id="panelCodes">
@@ -122,6 +123,30 @@
           <p id="messageHint" class="muted small"></p>
           <ul id="messageList" class="msg-list"></ul>
           <p id="messageEmpty" class="muted" hidden>还没有收到留言。</p>
+        </section>
+      </div>
+
+      <div id="panelAnnouncement" hidden>
+        <section class="card">
+          <div class="list-head">
+            <h2>首页更新公告</h2>
+            <span class="muted small" id="announcementUpdatedAt">尚未发布</span>
+          </div>
+          <p class="muted small">
+            保存后立即生效：首页顶部会显示横幅，同一版本用户关闭后不再重复弹出。
+            留空并保存即下架公告。支持换行，最多 500 字。
+          </p>
+          <textarea
+            id="announcementText"
+            class="announce-textarea"
+            maxlength="500"
+            rows="6"
+            placeholder="例如：本站将于今晚 23:00 维护，预计 30 分钟…"
+          ></textarea>
+          <div class="announce-actions">
+            <span class="muted small" id="announcementCount">0 / 500</span>
+            <button id="announcementSave" class="btn primary" type="button">保存公告</button>
+          </div>
         </section>
       </div>
     </section>

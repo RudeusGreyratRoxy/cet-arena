@@ -614,3 +614,31 @@ tr.row-used td {
 .msg-actions .btn {
   min-height: 36px;
 }
+
+/* 公告管理（vip12） */
+.announce-textarea {
+  width: 100%;
+  min-height: 140px;
+  margin-top: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.03);
+  font: inherit;
+  line-height: 1.7;
+  resize: vertical;
+}
+
+.announce-textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.announce-actions {
+  display: flex;
+  margin-top: 10px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}

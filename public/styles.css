@@ -2933,3 +2933,68 @@ a:focus-visible {
 #trialTimer.is-urgent {
   color: #ff6b6b;
 }
+
+/* ---------------------------------------------------------------
+   首页更新公告横幅（vip12）
+   --------------------------------------------------------------- */
+.announce {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  width: min(1080px, 100%);
+  margin: 0 auto 16px;
+  padding: 14px 16px;
+  border: 1px solid rgba(201, 255, 99, 0.35);
+  border-radius: var(--radius);
+  background: rgba(201, 255, 99, 0.08);
+}
+
+.announce[hidden] {
+  display: none;
+}
+
+.announce-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.announce-title {
+  margin: 0 0 6px;
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+}
+
+.announce-text {
+  margin: 0;
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.announce-time {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.announce-close {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+  background: transparent;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.announce-close:hover {
+  color: var(--text);
+  border-color: var(--line-strong);
+}

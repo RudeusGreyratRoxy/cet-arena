@@ -1,4 +1,4 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
@@ -10,7 +10,7 @@
     />
     <title>CET Arena · 双人词汇对战</title>
     <link rel="icon" href="data:,">
-    <link rel="stylesheet" href="/styles.css?v=20261112-vip11" />
+    <link rel="stylesheet" href="/styles.css?v=20261112-vip12" />
   </head>
   <body data-view="loading">
     <div class="ambient ambient-one" aria-hidden="true"></div>
@@ -49,6 +49,21 @@
       </section>
 
       <section class="view" id="view-home" aria-label="首页" hidden>
+        <div class="announce" id="announcementBanner" hidden aria-live="polite">
+          <div class="announce-body">
+            <p class="announce-title">📢 更新公告</p>
+            <p class="announce-text" id="announcementText"></p>
+            <p class="announce-time" id="announcementTime"></p>
+          </div>
+          <button
+            class="announce-close"
+            id="announcementClose"
+            type="button"
+            aria-label="关闭公告"
+          >
+            ×
+          </button>
+        </div>
         <div class="home-grid">
           <div class="hero">
             <p class="eyebrow">REAL-TIME VOCAB DUEL · 2P ONLY</p>
@@ -508,7 +523,7 @@
     <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
 
     <script src="/socket.io/socket.io.min.js"></script>
-    <script src="/wrongbook.js?v=20261112-vip11"></script>
-    <script src="/app.js?v=20261112-vip11"></script>
+    <script src="/wrongbook.js?v=20261112-vip12"></script>
+    <script src="/app.js?v=20261112-vip12"></script>
   </body>
 </html>

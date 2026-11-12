@@ -34,8 +34,14 @@
     emptyHint: el('emptyHint'),
     tabCodes: el('tabCodes'),
     tabMessages: el('tabMessages'),
+    tabAnnouncement: el('tabAnnouncement'),
     panelCodes: el('panelCodes'),
     panelMessages: el('panelMessages'),
+    panelAnnouncement: el('panelAnnouncement'),
+    announcementText: el('announcementText'),
+    announcementCount: el('announcementCount'),
+    announcementSave: el('announcementSave'),
+    announcementUpdatedAt: el('announcementUpdatedAt'),
     messageBadge: el('messageBadge'),
     messageList: el('messageList'),
     messageHint: el('messageHint'),
@@ -56,6 +62,9 @@
     messages: [],
     messageStats: { total: 0, pending: 0 },
     messageFilter: 'all',
+    announcement: { content: '', updatedAt: null },
+    // 编辑中标记：防止 30 秒轮询把站长正在写的内容冲掉
+    announcementDirty: false,
   };
 
   // ---------------------------------------------------------------- 工具
@@ -276,16 +285,78 @@
 
   // ---------------------------------------------------------------- 标签页 & 留言
 
+  // 三个 tab：codes / messages / announcement（之前是二值枚举，新增公告 tab 必须一起改）
+  const TABS = ['codes', 'messages', 'announcement'];
+
   function switchTab(tab) {
-    state.activeTab = tab === 'messages' ? 'messages' : 'codes';
-    const isMessages = state.activeTab === 'messages';
-    ui.panelCodes.hidden = isMessages;
-    ui.panelMessages.hidden = !isMessages;
-    ui.tabCodes.classList.toggle('is-active', !isMessages);
-    ui.tabMessages.classList.toggle('is-active', isMessages);
-    ui.tabCodes.setAttribute('aria-selected', String(!isMessages));
-    ui.tabMessages.setAttribute('aria-selected', String(isMessages));
-    if (isMessages) loadMessages();
+    state.activeTab = TABS.includes(tab) ? tab : 'codes';
+    const active = state.activeTab;
+
+    ui.panelCodes.hidden = active !== 'codes';
+    ui.panelMessages.hidden = active !== 'messages';
+    ui.panelAnnouncement.hidden = active !== 'announcement';
+
+    ui.tabCodes.classList.toggle('is-active', active === 'codes');
+    ui.tabMessages.classList.toggle('is-active', active === 'messages');
+    ui.tabAnnouncement.classList.toggle('is-active', active === 'announcement');
+    ui.tabCodes.setAttribute('aria-selected', String(active === 'codes'));
+    ui.tabMessages.setAttribute('aria-selected', String(active === 'messages'));
+    ui.tabAnnouncement.setAttribute('aria-selected', String(active === 'announcement'));
+
+    if (active === 'messages') loadMessages();
+    if (active === 'announcement') fillAnnouncement();
+  }
+
+  // ---------------------------------------------------------------- 公告
+
+  function fillAnnouncement() {
+    // 站长正在编辑时不回填，避免 30 秒轮询把输入框内容冲掉
+    if (state.announcementDirty) return;
+    const data = state.announcement || { content: '' };
+    ui.announcementText.value = data.content || '';
+    updateAnnouncementMeta(data.updatedAt);
+    updateAnnouncementCount();
+  }
+
+  function updateAnnouncementMeta(updatedAt) {
+    if (!ui.announcementUpdatedAt) return;
+    ui.announcementUpdatedAt.textContent = updatedAt
+      ? `上次更新：${formatTime(updatedAt)}`
+      : '尚未发布';
+  }
+
+  function updateAnnouncementCount() {
+    if (!ui.announcementCount) return;
+    const length = Array.from(ui.announcementText.value || '').length;
+    ui.announcementCount.textContent = `${length} / 500`;
+  }
+
+  async function saveAnnouncement() {
+    const content = ui.announcementText.value;
+    ui.announcementSave.disabled = true;
+    const res = await request('/api/admin/announcement', {
+      method: 'POST',
+      body: { content },
+    });
+    ui.announcementSave.disabled = false;
+
+    if (res.status === 401) {
+      showLogin('登录已过期，请重新登录');
+      return;
+    }
+    if (!res.ok) {
+      toast(res.data.message || '保存失败，请重试');
+      return;
+    }
+
+    state.announcement = {
+      content: res.data.content || '',
+      updatedAt: res.data.updatedAt || null,
+    };
+    state.announcementDirty = false;
+    updateAnnouncementMeta(state.announcement.updatedAt);
+    updateAnnouncementCount();
+    toast(state.announcement.content ? '公告已发布' : '公告已下架');
   }
 
   function updateMessageBadge() {
@@ -440,6 +511,10 @@
     state.stats = res.data.stats || null;
     state.live = res.data.live || null;
     if (res.data.messages) state.messageStats = res.data.messages;
+    if (res.data.announcement) {
+      state.announcement = res.data.announcement;
+      if (state.activeTab === 'announcement') fillAnnouncement();
+    }
     showAdmin();
     render();
     updateMessageBadge();
@@ -561,6 +636,12 @@
 
     ui.tabCodes.addEventListener('click', () => switchTab('codes'));
     ui.tabMessages.addEventListener('click', () => switchTab('messages'));
+    ui.tabAnnouncement.addEventListener('click', () => switchTab('announcement'));
+    ui.announcementSave.addEventListener('click', saveAnnouncement);
+    ui.announcementText.addEventListener('input', () => {
+      state.announcementDirty = true;
+      updateAnnouncementCount();
+    });
     ui.filterAll.addEventListener('click', () => setMessageFilter('all'));
     ui.filterPending.addEventListener('click', () => setMessageFilter('pending'));
 
