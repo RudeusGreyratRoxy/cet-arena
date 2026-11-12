@@ -7,6 +7,7 @@
 > 强制格式（最新在最上）：`[YYYY-MM-DD HH:mm] 版本号 | 核心改动 | 遗留问题`
 > 每次任务结束**必须**在此节点顶部新增一行，无需用户提醒。
 
+- [2026-11-12 16:05] `20261112-vip9`（已上线） | 部署到腾讯云 4ad475f + `ADMIN_PASSWORD` 注入重启 + `pm2 save`；线上实测：连发 5 条成功、第 6 条被限流、标记已处理后额度归还、删除后计数下降，测试数据已清理 | 无
 - [2026-11-12 16:04] `20261112-vip9` | 留言板限流改为**动态配额**：同一设备同时最多 5 条「未处理」留言，站长标记已处理/删除后额度自动归还；配额校验从「总数」改为「`status !== 'handled'` 计数」；前端弹窗提示与超限文案同步 | 无
 - [2026-11-12 15:55] `20261112-vip8`（已上线） | 部署到腾讯云：`git pull` 471e4bd + `ADMIN_PASSWORD` 注入重启 + `pm2 save`；线上音频 2869 个文件、`/audio/abandon.mp3?v=2` 返回 9936B + immutable | 无
 - [2026-11-12 15:43] `20261112-vip8` | 音频升级为 edge-tts `en-US-JennyNeural`（24kHz/48kbps，均 9.4KB、全量 26.38MB）；音频 URL 加 `?v=2` 破 immutable 缓存；清房宽限 10s→60s，`deleteRoom` 补 `io.socketsLeave` + 清理 `socketPlayers`/`socket.data` | 已随本次部署上线
@@ -48,16 +49,17 @@
 
 ## 线上版本
 
-- 服务器提交：`471e4bd feat: 高清神经网络语音 + 声音唤醒 + 留言板 + 清房防误杀（vip8）`
-- 前端版本号：`20261112-vip8`（本地与线上一致）
+- 服务器提交：`4ad475f feat: 留言板改为动态配额（同时最多 5 条未处理）（vip9）`
+- 前端版本号：`20261112-vip9`（本地与线上一致）
 - 地址：<http://1.15.152.160:3000>　后台：<http://1.15.152.160:3000/admin>
 - 音频：`public/audio/` 2869 个文件（26.38MB），`/audio/<word>.mp3?v=2` 走 immutable 强缓存
+- 留言：`data/messages.json`，当前 0 条（验收数据已清理）
 - 卡密状态：`/opt/cet-arena/data/vip_codes.state.json` 不存在（全新，11 张卡 → 9 可用 / 0 已绑定）
 - 进程环境：`ADMIN_PASSWORD` 已注入并 `pm2 save` 持久化（可用 `pm2 pid cet-arena` + `tr '\0' '\n' < /proc/<pid>/environ | grep ADMIN` 复核）
 
 ## 待办事项
 
-- 线上已全量同步 vip8，暂无阻塞项。
+- 线上已全量同步 vip9，暂无阻塞项；今晚收工。
 - 观察项：新 `emptyRoomGraceMs` = 60 秒是否够用（原 10 秒易误杀），若仍有玩家反馈对局中掉线后回不来可再放宽。
 - 安全加固建议：生产环境若缺少 `ADMIN_PASSWORD` 应拒绝启动或强制报错，避免静默回落到代码里的默认占位密码。
 - 轮换密码方式：`ADMIN_PASSWORD='新密码' pm2 restart cet-arena --update-env && pm2 save`（变量名固定，值只存在于服务器）。
