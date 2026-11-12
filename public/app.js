@@ -8,7 +8,7 @@
     vip: 'cetArena.vip.v1',
     device: 'cetArena.deviceToken.v1',
   };
-  const APP_VERSION = '20261112-vip9';
+  const APP_VERSION = '20261112-vip10';
 
   const VIEW_IDS = ['loading', 'home', 'room', 'game', 'result', 'solo'];
   const LETTERS = ['A', 'B', 'C', 'D'];
@@ -308,8 +308,11 @@
         setView('home');
       }
 
-      // 本地存过激活码：连上后静默重验（同一 device_token 视为同一台设备）。
-      if (state.vip.code && !state.vip.verified) {
+      // 服务端 VIP 状态是「连接级」的：断线、重连、服务重启都会丢失，
+      // 而本地 state.vip.verified 仍是 true。旧的 `!state.vip.verified` 条件会跳过重验，
+      // 导致重连后第一次建房/加入被误判「需要激活码」并弹出验证框（假拦截）。
+      // 因此只要本地存过激活码，每次连上都静默重验一次。
+      if (state.vip.code) {
         verifyVipCode(state.vip.code).then((result) => {
           if (!result.ok) clearVip();
         });
