@@ -7,7 +7,8 @@
 > 强制格式（最新在最上）：`[YYYY-MM-DD HH:mm] 版本号 | 核心改动 | 遗留问题`
 > 每次任务结束**必须**在此节点顶部新增一行，无需用户提醒。
 
-- [2026-11-12 15:43] `20261112-vip8` | 音频升级为 edge-tts `en-US-JennyNeural`（24kHz/48kbps，均 9.4KB、全量 26.38MB）；音频 URL 加 `?v=2` 破 immutable 缓存；清房宽限 10s→60s，`deleteRoom` 补 `io.socketsLeave` + 清理 `socketPlayers`/`socket.data` | 待部署 vip8
+- [2026-11-12 15:55] `20261112-vip8`（已上线） | 部署到腾讯云：`git pull` 471e4bd + `ADMIN_PASSWORD` 注入重启 + `pm2 save`；线上音频 2869 个文件、`/audio/abandon.mp3?v=2` 返回 9936B + immutable | 无
+- [2026-11-12 15:43] `20261112-vip8` | 音频升级为 edge-tts `en-US-JennyNeural`（24kHz/48kbps，均 9.4KB、全量 26.38MB）；音频 URL 加 `?v=2` 破 immutable 缓存；清房宽限 10s→60s，`deleteRoom` 补 `io.socketsLeave` + 清理 `socketPlayers`/`socket.data` | 已随本次部署上线
 - [2026-11-12 ~15:05] `20261112-vip7` | 发音彻底废弃 `speechSynthesis` 改本地 MP3（8kHz/24kbps）；新增「点击唤醒声音」静音 MP3；留言板 + 后台「留言管理」；删除 debug 面板 | 音质发闷，需换高质量 TTS（已在 vip8 解决）
 - [2026-11-12 ~14:00] `20261112-vip5` | 卡密绑定主体从 IP 改为设备 Token，堵住校园网 NAT 白嫖；后台卡密表新增「绑定设备」列 | 无
 - [2026-11-12 ~12:40] `d6e5c10` | 站长后台 `/admin` 上线：卡密列表、批量生成、解绑重置、密码登录 + 防爆破限流 | 无
@@ -46,22 +47,21 @@
 
 ## 线上版本
 
-- 服务器提交：`ef09b48 feat: 卡密绑定改为设备 Token，杜绝校园网 NAT 共享`
-- 前端版本号：`20261112-vip5`（**本地已升到 `20261112-vip8`，尚未部署**）
+- 服务器提交：`471e4bd feat: 高清神经网络语音 + 声音唤醒 + 留言板 + 清房防误杀（vip8）`
+- 前端版本号：`20261112-vip8`（本地与线上一致）
 - 地址：<http://1.15.152.160:3000>　后台：<http://1.15.152.160:3000/admin>
-- 卡密状态：`/opt/cet-arena/data/vip_codes.state.json` 不存在（全新，11 张卡全部未使用）
+- 音频：`public/audio/` 2869 个文件（26.38MB），`/audio/<word>.mp3?v=2` 走 immutable 强缓存
+- 卡密状态：`/opt/cet-arena/data/vip_codes.state.json` 不存在（全新，11 张卡 → 9 可用 / 0 已绑定）
 - 进程环境：`ADMIN_PASSWORD` 已注入并 `pm2 save` 持久化（可用 `pm2 pid cet-arena` + `tr '\0' '\n' < /proc/<pid>/environ | grep ADMIN` 复核）
 
 ## 待办事项
 
-- **把 `20261112-vip8` 推线上**（高清音频 + 声音唤醒 + 留言板）：`git pull` → `ADMIN_PASSWORD=... pm2 restart cet-arena --update-env` → `pm2 save`。
-- **部署注意**：`public/audio/` 现有 2869 个文件、**26.38MB**（比上一版 7MB 大不少），首次 `git pull` 会明显更慢；传完用 `ls public/audio | wc -l` 确认是 2869。
-- 上线后验证：手机听音题音质应明显好于旧版；`curl -I 'http://127.0.0.1:3000/audio/abandon.mp3?v=2'` 应返回 `immutable` 且 9936 字节左右。
-- 若以后还要换音源：**必须递增 `app.js` 的 `AUDIO_VERSION`**，否则老设备被 immutable 缓存一年。
+- 线上已全量同步 vip8，暂无阻塞项。
+- 观察项：新 `emptyRoomGraceMs` = 60 秒是否够用（原 10 秒易误杀），若仍有玩家反馈对局中掉线后回不来可再放宽。
 - 安全加固建议：生产环境若缺少 `ADMIN_PASSWORD` 应拒绝启动或强制报错，避免静默回落到代码里的默认占位密码。
 - 轮换密码方式：`ADMIN_PASSWORD='新密码' pm2 restart cet-arena --update-env && pm2 save`（变量名固定，值只存在于服务器）。
 - 后续可选：留言按「已处理/待处理」分页、卡密按批次打标签、导出 CSV。
-- 重做音频：`PYTHONPATH=<.tools/pylibs-tts> python scripts/build_audio_edge.py --skip-existing`（需全权限 + 联网）。
+- 重做音频：`PYTHONPATH=<.tools/pylibs-tts> python scripts/build_audio_edge.py --skip-existing`（需全权限 + 联网），换音源记得递增 `AUDIO_VERSION`。
 
 ## 环境坑位
 
