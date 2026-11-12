@@ -11,6 +11,9 @@ const { createArenaServer } = require('../src/app');
 const { loadWords } = require('../src/wordBank');
 const { APP_VERSION } = require('../src/version');
 
+// 专属码已改为环境变量注入（仓库不再保存明文）：这里用临时无限码验证 VIP 路径。
+process.env.VIP_UNLIMITED_CODES = 'TESTBOSS1';
+
 const words = loadWords();
 const byWord = new Map(words.map((entry) => [entry.word, entry]));
 
@@ -66,7 +69,7 @@ async function main() {
     '免费用户无法开始',
     freeSolo.ok === false && freeSolo.code === 'VIP_REQUIRED'
   );
-  const activated = await call(socket, 'vip:verify', { code: 'BOSS888' });
+  const activated = await call(socket, 'vip:verify', { code: 'TESTBOSS1' });
   ok('站长码开通成功', activated.ok === true);
 
   console.log('=== 1. 启动校验 ===');

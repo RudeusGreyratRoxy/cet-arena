@@ -1,6 +1,7 @@
 node_modules/
 .tools/
 .env
+.env.production
 *.log
 .DS_Store
 __probe_existing.txt

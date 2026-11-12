@@ -35,6 +35,19 @@ const DEFAULT_CONFIG = {
 const SESSION_MISSING = 'SESSION_MISSING';
 
 /**
+ * 卡密脱敏，用于审计日志：
+ * - 长度 < 6 全打星；
+ * - 否则保留首 2 位 + **** + 末 2 位。
+ * 避免完整卡密（含站长码/用户输入的错码）落进 pm2 日志。
+ */
+function maskCode(raw) {
+  const code = String(raw == null ? '' : raw);
+  if (!code) return '';
+  if (code.length < 6) return '*'.repeat(code.length);
+  return `${code.slice(0, 2)}****${code.slice(-2)}`;
+}
+
+/**
  * 创建完整的 HTTP + Socket.IO 服务，但不自动 listen，便于测试。
  */
 function createArenaServer(options = {}) {
@@ -1324,7 +1337,7 @@ function createArenaServer(options = {}) {
       const result = vip.verify(payload.code, ip, deviceToken);
       audit('vip_verify', {
         ip,
-        code: String(payload.code == null ? '' : payload.code).slice(0, 24),
+        code: maskCode(payload && payload.code),
         // 只记录设备 Token 前 8 位，便于排查「疑似共享」又不落完整凭据。
         device: deviceToken ? String(deviceToken).slice(0, 8) : null,
         ok: result.ok,

@@ -13,6 +13,9 @@ const { io } = require('socket.io-client');
 const { createArenaServer } = require('../src/app');
 const { APP_VERSION } = require('../src/version');
 
+// 专属码已改为环境变量注入（仓库不再保存明文）：这里用临时无限码验证 VIP 路径。
+process.env.VIP_UNLIMITED_CODES = 'TESTBOSS1';
+
 function connect(url) {
   return new Promise((resolve, reject) => {
     const socket = io(url, {
@@ -104,7 +107,7 @@ async function main() {
   ok('免费用户被拒绝', freeSolo.ok === false && freeSolo.code === 'VIP_REQUIRED');
   ok('提示文案说明是 VIP 专属', /VIP/.test(freeSolo.error || ''));
 
-  const vip = await call(socket, 'vip:verify', { code: 'BOSS888' });
+  const vip = await call(socket, 'vip:verify', { code: 'TESTBOSS1' });
   ok('站长码激活成功', vip.ok === true);
   const vipSolo = await call(socket, 'solo:start', { words: ['abandon', 'ability', 'absolute'] });
   ok('VIP 用户可以使用错词挑战', vipSolo.ok === true);

@@ -86,6 +86,24 @@ function createVipStore(options = {}) {
   if (!seed.codes || typeof seed.codes !== 'object') seed.codes = {};
   const codes = seed.codes;
 
+  // 专属（无限免绑）码不再随仓库下发：由环境变量 VIP_UNLIMITED_CODES 注入，
+  // 避免明文卡密写进 git 历史。格式为逗号分隔，例如 "CODE1,CODE2"。
+  // 种子 JSON 里已存在的同码不覆盖（以 JSON 为准），保证旧数据仍可平滑过渡。
+  const envCodeList = String(process.env.VIP_UNLIMITED_CODES || '')
+    .split(',')
+    .map((item) => normalizeCode(item))
+    .filter(Boolean);
+  for (const envCode of envCodeList) {
+    if (Object.prototype.hasOwnProperty.call(codes, envCode)) continue;
+    codes[envCode] = { type: 'unlimited', label: '专属(env)' };
+  }
+  if (envCodeList.length === 0) {
+    console.warn(
+      '[vip] 未配置环境变量 VIP_UNLIMITED_CODES，当前没有任何专属（无限免绑）码；' +
+        '如需站长码请在启动环境里配置后再重启'
+    );
+  }
+
   let state = readJson(statePath, {});
   if (!state || typeof state !== 'object') state = {};
 
