@@ -7,6 +7,7 @@
 > 强制格式（最新在最上）：`[YYYY-MM-DD HH:mm] 版本号 | 核心改动 | 遗留问题`
 > 每次任务结束**必须**在此节点顶部新增一行，无需用户提醒。
 
+- [2026-11-12 18:00] `20261112-vip11`（已上线） | 部署 vip11 到腾讯云：`git pull` a261927 + `pm2 restart cet-arena --update-env`（从 /proc 读回并原样回注 `ADMIN_PASSWORD`，环境哈希前后一致）+ `pm2 save`；公网 healthz 返回 vip11，首页资源 `?v=vip11`，线上 `app.js` 已含 `trialPlay` 注册 | 无
 - [2026-11-12 17:58] `20261112-vip11` | 修复手机端「点击第 1 关无反应」：`el` 映射漏注册 `trialPlay`，`startTrial` 里 `el.trialPlay.hidden = false` 抛 `TypeError`，且该行在 `setView('trial')` 之前，async 异常被吞 → 界面无任何反应（请求其实已发出）。补 `el.trialPlay`，新增「点击关卡进入答题页」回归用例（摘掉修复即可复现该 TypeError），`APP_VERSION` → vip11 破缓存 | 待部署
 - [2026-11-12 17:40] `20261112-vip10` | 阶段 1&2：单人限时闯关（第 1/2/3 关每题 10/7/5 秒，服务端按 deadline 复核超时并判错）+ 错词本改为 VIP 专属（服务端 `solo:start` 加激活闸门）+ 关卡列表第 4 关灰色占位；levels.json 缩为每关 50 词，新增 trial 回归测试 | 线上仍 vip9（未部署）；关卡按 id 顺序（字母序）待人工选题优化
 - [2026-11-12 17:32] `20261112-vip10` | 阶段 0：新增 `data/levels.json`（3 关 × 60 词）+ `src/levels.js`（读取/校验/`trialPoolFor`/`listLevels`）；修复断线重连后 VIP 假拦截（每次 connect 静默重验）；`APP_VERSION` 升至 vip10 | 关卡尚未接入对局（阶段 1 处理）
@@ -56,7 +57,7 @@
 ## 线上版本
 
 - 服务器提交：功能提交 `4ad475f feat: 留言板改为动态配额（同时最多 5 条未处理）（vip9）`，随后文档提交 `984c050 docs: 记录 vip9 上线与配额验收结果` 为分支 HEAD
-- 前端版本号：本地 `20261112-vip11`（待部署）/ 线上 `20261112-vip10`
+- 前端版本号：本地 `20261112-vip11` / 线上 `20261112-vip11`（已同步）
 - 地址：<http://1.15.152.160:3000>　后台：<http://1.15.152.160:3000/admin>
 - 音频：`public/audio/` 2869 个文件（26.38MB），`/audio/<word>.mp3?v=2` 走 immutable 强缓存
 - 留言：`data/messages.json`，当前 0 条（验收数据已清理）
