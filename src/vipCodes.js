@@ -154,6 +154,11 @@ function createVipStore(options = {}) {
       lastIp: record ? record.lastIp || null : null,
       usedAt: record ? record.usedAt || null : null,
       revokedAt: record ? record.revokedAt || null : null,
+      // 已拉黑的设备数量（只给数量，绝不回传 token）
+      revokedDeviceCount:
+        record && Array.isArray(record.revokedDevices) ? record.revokedDevices.length : 0,
+      // 只有运行时新增的卡密可以「彻底删除」；仓库里的种子卡密只能改文件
+      deletable: Object.prototype.hasOwnProperty.call(custom.codes, code),
     };
   }
 
@@ -257,31 +262,13 @@ function createVipStore(options = {}) {
         return { ok: true, kind: 'once', firstUse: true, message: '验证成功' };
       }
 
-      // 已解绑：原设备在上面的 revokedDevices 已拦截；其余设备视为「换机」，允许重新激活。
+      // 已封禁（解绑）：**所有设备**一律拒绝，直到站长在后台点「允许换机」。
+      // 这样「清缓存/换浏览器换出一个新 deviceToken」也无法绕过。
       if (record.status === 'revoked') {
-        if (silent) {
-          return {
-            ok: false,
-            code: 'REVOKED',
-            message: '该卡密已被站长解绑，请重新输入激活码',
-          };
-        }
-        state[code] = {
-          status: 'used',
-          boundDevice: device,
-          boundIp: ip || null,
-          lastIp: ip || null,
-          usedAt: now().toISOString(),
-          revokedDevices: Array.isArray(record.revokedDevices)
-            ? record.revokedDevices.slice()
-            : [],
-        };
-        writeJsonAtomic(statePath, state);
         return {
-          ok: true,
-          kind: 'once',
-          rebind: true,
-          message: '验证成功，已在新设备激活',
+          ok: false,
+          code: 'REVOKED',
+          message: '该卡密已被站长封禁，如需换机请联系站长开通',
         };
       }
 
@@ -323,13 +310,18 @@ function createVipStore(options = {}) {
     return {
       total: all.length,
       unlimited: all.length - once.length,
-      available: once.filter((entry) => entry.status !== 'used').length,
+      // 封禁中的码不能算「可用」，必须站长点「允许换机」后才回到可用
+      available: once.filter(
+        (entry) => entry.status !== 'used' && entry.status !== 'revoked'
+      ).length,
       used: once.filter((entry) => entry.status === 'used').length,
+      revoked: once.filter((entry) => entry.status === 'revoked').length,
     };
   }
 
   /**
-   * 解绑：清掉该卡密在 state 里的使用记录，让它可以重新在任意 IP 激活。
+   * 解绑 = 封禁：该码立即对所有设备失效（含原设备）。
+   * 需要给新设备使用时，站长再调 allowRebind()。
    * 站长码不使用绑定状态，直接拒绝，避免前端把它当成可解绑对象。
    */
   function reset(rawCode) {
@@ -346,7 +338,7 @@ function createVipStore(options = {}) {
     }
 
     // 解绑 = 「撤销授权」，不是「删记录」：
-    // 记住被撤销的设备，让它永久失效；同时保留记录，使该码可在新设备重新激活。
+    // 记住被撤销的设备（只增不减，永久拉黑）；记录保留为 revoked，等待站长显式放行换机。
     const revokedDevices = Array.isArray(current.revokedDevices)
       ? current.revokedDevices.slice()
       : [];
@@ -369,10 +361,84 @@ function createVipStore(options = {}) {
 
     return {
       ok: true,
-      message: '已解绑：原设备立即失效，该卡密可在新设备重新激活',
+      message: '已封禁：所有设备立即失效，需在后台点「允许换机」才能给新设备使用',
       record: describe(code),
       // 仅用于服务端在线踢人，路由层不会把它返回给前端。
       previousDevice: current.boundDevice || null,
+    };
+  }
+
+  /**
+   * 允许换机：把已封禁的码恢复为「未使用」，新设备可以重新绑定。
+   * 关键：**保留 revokedDevices**，原设备依然被永久拒绝。
+   */
+  function allowRebind(rawCode) {
+    const code = normalizeCode(rawCode);
+    if (!has(code)) {
+      return { ok: false, code: 'INVALID', message: '该卡密不存在' };
+    }
+    if (normalizeType(codes[code].type) === 'unlimited') {
+      return { ok: false, code: 'UNLIMITED', message: '站长码不绑定设备，无需换机' };
+    }
+    const record = state[code];
+    if (!record || record.status !== 'revoked') {
+      return { ok: false, code: 'NOT_REVOKED', message: '该卡密当前不是封禁状态，无需换机' };
+    }
+
+    state[code] = {
+      status: 'available',
+      boundDevice: null,
+      boundIp: null,
+      lastIp: record.lastIp || null,
+      usedAt: record.usedAt || null,
+      revokedAt: record.revokedAt || null,
+      revokedDevices: Array.isArray(record.revokedDevices)
+        ? record.revokedDevices.slice()
+        : [],
+      rebindAllowedAt: now().toISOString(),
+    };
+    writeJsonAtomic(statePath, state);
+
+    return {
+      ok: true,
+      message: '已允许换机：新设备可重新激活，原设备仍被拒绝',
+      record: describe(code),
+    };
+  }
+
+  /**
+   * 彻底删除卡密：仅限运行时新增（vip_codes.custom.json）的码；
+   * 种子卡密属于仓库文件，接口层直接拒绝，避免误删后又被 git 恢复造成"诈尸"。
+   */
+  function removeCode(rawCode) {
+    const code = normalizeCode(rawCode);
+    if (!has(code)) {
+      return { ok: false, code: 'INVALID', message: '该卡密不存在' };
+    }
+    if (!Object.prototype.hasOwnProperty.call(custom.codes, code)) {
+      return {
+        ok: false,
+        code: 'SEED_PROTECTED',
+        message: '种子卡密不能在这里删除（它在仓库的 vip_codes.json 里）',
+      };
+    }
+
+    const previousDevice =
+      state[code] && state[code].boundDevice ? state[code].boundDevice : null;
+    delete custom.codes[code];
+    delete codes[code];
+    const hadState = Boolean(state[code]);
+    delete state[code];
+    writeJsonAtomic(customPath, custom);
+    writeJsonAtomic(statePath, state);
+
+    return {
+      ok: true,
+      message: `已彻底删除卡密「${code}」，之后无法再激活`,
+      code,
+      hadState,
+      // 仅用于服务端踢线
+      previousDevice,
     };
   }
 
@@ -473,6 +539,8 @@ function createVipStore(options = {}) {
   return {
     verify,
     statusByDevice,
+    allowRebind,
+    removeCode,
     list,
     describe,
     reset,

@@ -236,10 +236,15 @@ async function main() {
     ok('统计已绑定数减少', reset.data.stats.used === 1); // fresh 仍在
 
     const afterReset = arena.vip.verify('VIP888', '10.9.9.2', DEVICE_Y);
+    ok('封禁后新设备同样被拒', afterReset.ok === false && afterReset.code === 'REVOKED');
+
+    const allowRebind = await http('POST', '/api/admin/codes/allow-rebind', { body: { code: 'VIP888' } });
     ok(
-      '解绑后可在新设备重新激活',
-      afterReset.ok === true && afterReset.rebind === true
+      '允许换机成功且状态回到 available',
+      allowRebind.status === 200 && allowRebind.data.code.status === 'available'
     );
+    const afterAllow = arena.vip.verify('VIP888', '10.9.9.2', DEVICE_Y);
+    ok('允许换机后新设备可激活', afterAllow.ok === true);
     ok('重新激活后绑定到新设备', readState().VIP888.boundDevice === DEVICE_Y);
 
     const badReset = await http('POST', '/api/admin/codes/reset', { body: { code: 'NOSUCH' } });
@@ -290,12 +295,49 @@ async function main() {
     const statusOld = await call(socket, 'vip:status', { deviceToken });
     ok('vip:status 对失效设备返回非 VIP', statusOld.ok === true && statusOld.vip === false);
 
-    // 同码换新设备仍可激活
+    // A'：封禁期间换新设备（新 token）同样被拒
     const otherDevice = 'e'.repeat(32);
+    const blockedNew = await call(socket, 'vip:verify', { code: 'VIP666', deviceToken: otherDevice });
+    ok('封禁期间新设备也被拒', blockedNew.ok === false && blockedNew.code === 'REVOKED');
+
+    // 站长点「允许换机」→ 新设备可绑，原设备仍死锁
+    const rebind = await http('POST', '/api/admin/codes/allow-rebind', { body: { code: 'VIP666' } });
+    ok('允许换机接口成功', rebind.status === 200 && rebind.data.ok === true);
+    ok('换机后状态为 available', rebind.data.code.status === 'available');
+    ok('已拉黑设备数仍为 1', rebind.data.code.revokedDeviceCount === 1);
+
     const newVerify = await call(socket, 'vip:verify', { code: 'VIP666', deviceToken: otherDevice });
-    ok('新设备可重新激活该码', newVerify.ok === true);
+    ok('换机后新设备可激活', newVerify.ok === true);
     const statusNew = await call(socket, 'vip:status', { deviceToken: otherDevice });
     ok('vip:status 对新设备返回 VIP', statusNew.ok === true && statusNew.vip === true);
+
+    const oldBlocked = await call(socket, 'vip:verify', { code: 'VIP666', deviceToken });
+    ok('换机后原设备仍被拒（永久拉黑）', oldBlocked.ok === false && oldBlocked.code === 'REVOKED');
+
+    // 彻底删除：自定义码可删，删除时踢线；种子码被保护
+    const customGen = await http('POST', '/api/admin/codes/generate-custom', { body: { code: 'KICKME01' } });
+    ok('自定义码生成成功', customGen.status === 200);
+    const kickDeviceToken = '9'.repeat(32);
+    const bindCustom = await call(socket, 'vip:verify', { code: 'KICKME01', deviceToken: kickDeviceToken });
+    ok('自定义码绑定到设备', bindCustom.ok === true);
+
+    const revokedOnDelete = new Promise((resolve) => socket.once('vip:revoked', resolve));
+    const del = await http('POST', '/api/admin/codes/delete', { body: { code: 'KICKME01' } });
+    ok('彻底删除成功', del.status === 200 && del.data.ok === true);
+    ok('删除时踢掉在线设备', del.data.kicked === 1);
+    const delEvent = await revokedOnDelete;
+    ok('删除会推送 vip:revoked', !!delEvent);
+    ok('删除后码从列表消失', !del.data.codes.some((item) => item.code === 'KICKME01'));
+    const goneVerify = await call(socket, 'vip:verify', { code: 'KICKME01', deviceToken: kickDeviceToken });
+    ok('删除后无法再激活', goneVerify.ok === false && goneVerify.code === 'INVALID');
+
+    const seedDel = await http('POST', '/api/admin/codes/delete', { body: { code: 'TESTSECRET1' } });
+    ok('种子卡密不允许彻底删除', seedDel.status === 400 && seedDel.data.code === 'SEED_PROTECTED');
+
+    const unauthDelete = await http('POST', '/api/admin/codes/delete', { body: { code: 'KICKME01' }, cookie: '' });
+    ok('未登录删除 401', unauthDelete.status === 401);
+    const unauthRebind = await http('POST', '/api/admin/codes/allow-rebind', { body: { code: 'VIP666' }, cookie: '' });
+    ok('未登录允许换机 401', unauthRebind.status === 401);
 
     socket.close();
 

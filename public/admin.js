@@ -179,7 +179,14 @@
   function statusOf(item) {
     if (item.kind === 'unlimited') return { text: '永久可用', cls: 'free', used: false };
     if (item.status === 'used') return { text: '已绑定', cls: 'used', used: true };
-    if (item.status === 'revoked') return { text: '已解绑（原设备失效）', cls: 'free', used: false };
+    if (item.status === 'revoked') {
+      const count = Number(item.revokedDeviceCount) || 0;
+      return {
+        text: count > 0 ? `已封禁 · 拉黑 ${count} 台` : '已封禁',
+        cls: 'used',
+        used: false,
+      };
+    }
     return { text: '未使用', cls: 'free', used: false };
   }
 
@@ -238,14 +245,27 @@
     tr.appendChild(makeCell('绑定时间', textSpan(formatTime(item.usedAt), 'mono')));
 
     const actionCell = makeCell('操作', '—');
+    const actions = [];
     if (status.used) {
+      actions.push({ label: '解绑 / 封禁', action: 'reset', cls: 'btn danger' });
+    }
+    if (item.status === 'revoked') {
+      actions.push({ label: '允许换机', action: 'allow-rebind', cls: 'btn' });
+    }
+    if (item.deletable) {
+      actions.push({ label: '彻底删除', action: 'delete', cls: 'btn danger' });
+    }
+    if (actions.length) {
       actionCell.textContent = '';
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.className = 'btn danger';
-      button.textContent = '解绑 / 重置';
-      button.dataset.reset = item.code;
-      actionCell.appendChild(button);
+      for (const entry of actions) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = entry.cls;
+        button.textContent = entry.label;
+        button.dataset.action = entry.action;
+        button.dataset.code = item.code;
+        actionCell.appendChild(button);
+      }
     }
     tr.appendChild(actionCell);
 
@@ -642,7 +662,7 @@
   async function handleReset(code) {
     if (!code || state.busy) return;
     const confirmed = window.confirm(
-      `确定要解绑卡密「${code}」吗？\n\n解绑后该卡密可以在新设备上重新激活；原设备将立即失去授权，即使刷新页面也无法恢复。`
+      `确定要封禁卡密「${code}」吗？\n\n封禁后该码对**所有设备**立即失效（原设备刷新、换浏览器都无效）。\n如需给新设备使用，请封禁后再点「允许换机」。`
     );
     if (!confirmed) return;
 
@@ -661,7 +681,61 @@
     if (index !== -1 && res.data.code) state.codes[index] = res.data.code;
     if (res.data.stats) state.stats = res.data.stats;
     render();
-    toast(`卡密 ${code} 已解绑，可重新激活`);
+    const kicked = Number(res.data.kicked) || 0;
+    toast(`卡密 ${code} 已封禁${kicked ? `，已踢下线 ${kicked} 个连接` : ''}`);
+  }
+
+  async function handleAllowRebind(code) {
+    if (!code || state.busy) return;
+    const confirmed = window.confirm(
+      `确定允许换机吗？\n\n卡密「${code}」将变回「未使用」，新设备可以重新激活；\n原设备仍在黑名单里，无法再次使用。`
+    );
+    if (!confirmed) return;
+
+    setBusy(true);
+    const res = await request('/api/admin/codes/allow-rebind', {
+      method: 'POST',
+      body: { code },
+    });
+    setBusy(false);
+    if (res.status === 401) {
+      showLogin('登录已过期，请重新登录');
+      return;
+    }
+    if (!res.ok) {
+      toast(res.data.message || '操作失败');
+      return;
+    }
+    state.codes = Array.isArray(res.data.codes) ? res.data.codes : state.codes;
+    if (res.data.stats) state.stats = res.data.stats;
+    render();
+    toast(`卡密 ${code} 已允许换机，新设备可重新激活`);
+  }
+
+  async function handleDeleteCode(code) {
+    if (!code || state.busy) return;
+    const confirmed = window.confirm(
+      `确定要彻底删除卡密「${code}」吗？\n\n删除后该码永久失效、无法恢复，已绑定设备会立即失去授权。\n此操作不可撤销。`
+    );
+    if (!confirmed) return;
+
+    setBusy(true);
+    const res = await request('/api/admin/codes/delete', { method: 'POST', body: { code } });
+    setBusy(false);
+    if (res.status === 401) {
+      showLogin('登录已过期，请重新登录');
+      return;
+    }
+    if (!res.ok) {
+      toast(res.data.message || '删除失败');
+      return;
+    }
+    state.codes = Array.isArray(res.data.codes)
+      ? res.data.codes
+      : state.codes.filter((item) => item.code !== code);
+    if (res.data.stats) state.stats = res.data.stats;
+    render();
+    toast(`卡密 ${code} 已彻底删除`);
   }
 
   function setMessageFilter(filter) {
@@ -703,9 +777,12 @@
     });
 
     ui.codeRows.addEventListener('click', (event) => {
-      const resetButton = event.target.closest('button[data-reset]');
-      if (resetButton) {
-        handleReset(resetButton.dataset.reset);
+      const actionButton = event.target.closest('button[data-action]');
+      if (actionButton) {
+        const { action, code } = actionButton.dataset;
+        if (action === 'reset') handleReset(code);
+        else if (action === 'allow-rebind') handleAllowRebind(code);
+        else if (action === 'delete') handleDeleteCode(code);
         return;
       }
       const codeCell = event.target.closest('.code-cell');

@@ -80,6 +80,10 @@ function createArenaServer(options = {}) {
       next(error);
       return;
     }
+    // 握手时就把设备指纹记到连接上：这样即使该设备后续验证失败（例如已被封禁），
+    // 后台解绑/删除时也能精准踢到它的在线连接。
+    const handshakeDevice = normalizeDeviceToken(socket.handshake.auth?.deviceToken);
+    if (handshakeDevice) socket.data.deviceToken = handshakeDevice;
     next();
   });
 
@@ -253,6 +257,21 @@ function createArenaServer(options = {}) {
     });
   });
 
+  // 在线踢人：把该设备所有在线连接降级为普通用户（不断线、不打断当前对局）。
+  function kickDevice(deviceToken, message) {
+    if (!deviceToken) return 0;
+    let kicked = 0;
+    for (const client of io.sockets.sockets.values()) {
+      if (client.data && client.data.deviceToken === deviceToken) {
+        client.data.vip = false;
+        client.data.vipCode = null;
+        client.emit('vip:revoked', { message });
+        kicked += 1;
+      }
+    }
+    return kicked;
+  }
+
   app.post('/api/admin/codes/reset', requireAdmin, (req, res) => {
     const body = req.body || {};
     const result = vip.reset(body.code);
@@ -267,20 +286,11 @@ function createArenaServer(options = {}) {
       return;
     }
 
-    // 在线踢人：把该设备所有在线连接降级为普通用户（不强制断开、不打断当前对局），
-    // 只发通知 + 清 socket.data.vip，下一次需要 VIP 权限的操作会被拦截。
-    let kicked = 0;
+    const kicked = kickDevice(
+      result.previousDevice,
+      '您的 VIP 授权已被站长撤销，请重新获取激活码'
+    );
     if (result.previousDevice) {
-      for (const client of io.sockets.sockets.values()) {
-        if (client.data && client.data.deviceToken === result.previousDevice) {
-          client.data.vip = false;
-          client.data.vipCode = null;
-          client.emit('vip:revoked', {
-            message: '您的 VIP 授权已被站长撤销，请重新获取激活码',
-          });
-          kicked += 1;
-        }
-      }
       audit('vip_revoked', {
         ip: httpIp(req),
         code: String(body.code || '').toUpperCase(),
@@ -293,6 +303,56 @@ function createArenaServer(options = {}) {
       ok: true,
       message: result.message,
       code: result.record,
+      stats: vip.stats(),
+      kicked,
+    });
+  });
+
+  // 允许换机：封禁 → 未使用；原设备仍在 revokedDevices 黑名单里。
+  app.post('/api/admin/codes/allow-rebind', requireAdmin, (req, res) => {
+    const body = req.body || {};
+    const result = vip.allowRebind(body.code);
+    audit('admin_allow_rebind', {
+      ip: httpIp(req),
+      code: String(body.code || '').toUpperCase(),
+      ok: result.ok,
+      code4: result.code || null,
+    });
+    if (!result.ok) {
+      res.status(400).json(result);
+      return;
+    }
+    res.json({
+      ok: true,
+      message: result.message,
+      code: result.record,
+      codes: vip.list(),
+      stats: vip.stats(),
+    });
+  });
+
+  // 彻底删除：仅对运行时新增的卡密生效（种子码由仓库维护）。
+  app.post('/api/admin/codes/delete', requireAdmin, (req, res) => {
+    const body = req.body || {};
+    const result = vip.removeCode(body.code);
+    audit('admin_delete_code', {
+      ip: httpIp(req),
+      code: String(body.code || '').toUpperCase(),
+      ok: result.ok,
+      code4: result.code || null,
+    });
+    if (!result.ok) {
+      res.status(400).json(result);
+      return;
+    }
+    const kicked = kickDevice(
+      result.previousDevice,
+      '您的 VIP 卡密已被站长删除，如已付费请联系站长重新获取'
+    );
+    res.json({
+      ok: true,
+      message: result.message,
+      codes: vip.list(),
       stats: vip.stats(),
       kicked,
     });
@@ -1419,6 +1479,9 @@ function createArenaServer(options = {}) {
     on('vip:verify', (payload, ack) => {
       const ip = clientIp(socket);
       const deviceToken = payload && payload.deviceToken;
+      const normalizedDevice = normalizeDeviceToken(deviceToken);
+      // 不管验证成功还是失败都记录设备指纹：验证失败的设备（已封禁）同样需要能被踢线。
+      if (normalizedDevice) socket.data.deviceToken = normalizedDevice;
       // silent=true 是前端「刷新/重连自动重验」，服务端在该模式下不允许首次绑定，
       // 避免解绑后本地残留的码被静默绑回原设备。
       const silent = Boolean(payload && payload.silent);
@@ -1439,14 +1502,14 @@ function createArenaServer(options = {}) {
         return;
       }
       socket.data.vip = true;
-      // 记住这台连接对应哪台设备，后台解绑时才能精准踢线。
-      socket.data.deviceToken = normalizeDeviceToken(deviceToken);
       socket.data.vipCode = String(payload.code || '').trim().toUpperCase();
       ack({ ok: true, kind: result.kind, message: result.message });
     });
 
     // 按设备查授权：前端 init 时的权威判定（不依赖本地缓存）。
     on('vip:status', (payload, ack) => {
+      const normalizedDevice = normalizeDeviceToken(payload && payload.deviceToken);
+      if (normalizedDevice) socket.data.deviceToken = normalizedDevice;
       const status = vip.statusByDevice(
         payload && payload.deviceToken,
         payload && payload.code

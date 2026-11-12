@@ -207,15 +207,43 @@ async function main() {
     const oldSilent = s9.verify('VIP888', '10.6.0.3', DEVICE_A, { silent: true });
     ok('原设备静默重验也被拒', oldSilent.ok === false && oldSilent.code === 'REVOKED');
 
-    const newDevice = s9.verify('VIP888', '10.6.0.4', DEVICE_B);
-    ok('新设备可重新激活', newDevice.ok === true && newDevice.rebind === true);
+    // A' 核心：封禁期间「换一个 deviceToken」也同样被拒（清缓存/换浏览器无效）
+    const anyDevice = s9.verify('VIP888', '10.6.0.4', DEVICE_B);
+    ok('封禁期间新设备（换 token）也被拒', anyDevice.ok === false && anyDevice.code === 'REVOKED');
+    const brandNew = s9.verify('VIP888', '10.6.0.5', 'f'.repeat(32));
+    ok('全新 token 同样被拒', brandNew.ok === false && brandNew.code === 'REVOKED');
+    ok('封禁后没有绑定任何设备', JSON.parse(fs.readFileSync(statePath, 'utf8')).VIP888.boundDevice === null);
+
+    // 站长点「允许换机」后：新设备可绑，原设备仍死锁
+    const allow = s9.allowRebind('VIP888');
+    ok('允许换机成功', allow.ok === true);
+    const stAllow = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+    ok('状态回到 available', stAllow.VIP888.status === 'available');
+    ok('原设备仍在黑名单', stAllow.VIP888.revokedDevices.includes(DEVICE_A));
+    ok('封禁设备数可查询', s9.describe('VIP888').revokedDeviceCount === 1);
+
+    const rebind = s9.verify('VIP888', '10.6.0.6', DEVICE_B);
+    ok('允许换机后新设备可激活', rebind.ok === true);
     ok('已绑定到新设备', JSON.parse(fs.readFileSync(statePath, 'utf8')).VIP888.boundDevice === DEVICE_B);
-    const oldStillBlocked = s9.verify('VIP888', '10.6.0.5', DEVICE_A);
-    ok('新设备激活后原设备仍被拒', oldStillBlocked.ok === false && oldStillBlocked.code === 'REVOKED');
+    const oldStillBlocked = s9.verify('VIP888', '10.6.0.7', DEVICE_A);
+    ok('换机后原设备仍被拒（永久拉黑）', oldStillBlocked.ok === false && oldStillBlocked.code === 'REVOKED');
+    ok('重复允许换机会被拒', s9.allowRebind('VIP888').code === 'NOT_REVOKED');
 
     ok('statusByDevice 对新设备返回 VIP', s9.statusByDevice(DEVICE_B).vip === true);
     ok('statusByDevice 对原设备返回非 VIP', s9.statusByDevice(DEVICE_A).vip === false);
     ok('statusByDevice 对专属码返回 VIP', s9.statusByDevice('', 'TESTSECRET1').vip === true);
+
+    // 彻底删除
+    const customCode = s9.generateCustom('DELME01');
+    ok('自定义码生成成功', customCode.ok === true);
+    s9.verify('DELME01', '10.6.0.8', DEVICE_A);
+    const removed = s9.removeCode('DELME01');
+    ok('彻底删除成功', removed.ok === true);
+    ok('删除后无法再验证', s9.verify('DELME01', '10.6.0.9', DEVICE_A).code === 'INVALID');
+    ok('删除后从列表消失', !s9.list().some((item) => item.code === 'DELME01'));
+    ok('删除后 custom 文件里也没有', !JSON.parse(fs.readFileSync(customPath, 'utf8')).codes.DELME01);
+    ok('删除后 state 记录已清理', !JSON.parse(fs.readFileSync(statePath, 'utf8')).DELME01);
+    ok('种子码不允许删除', s9.removeCode('VIP666').code === 'SEED_PROTECTED');
 
     console.log('=== 10. 建房 / 加入闸门（socket 集成）===');
     resetState();

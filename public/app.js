@@ -9,7 +9,7 @@
     device: 'cetArena.deviceToken.v1',
     announcement: 'cetArena.announcementSeen.v1',
   };
-  const APP_VERSION = '20261112-vip15';
+  const APP_VERSION = '20261112-vip16';
 
   const VIEW_IDS = ['loading', 'home', 'room', 'game', 'result', 'solo', 'levels', 'trial'];
 
@@ -429,7 +429,9 @@
   function connectSocket() {
     const socket = io({
       autoConnect: false,
-      auth: { clientVersion: APP_VERSION },
+      // 设备指纹放进握手：即使这台设备随后验证失败（已被封禁），
+      // 服务端也能记录并精准踢线。
+      auth: { clientVersion: APP_VERSION, deviceToken: deviceToken() },
       reconnection: true,
       reconnectionAttempts: 50,
       reconnectionDelay: 500,
