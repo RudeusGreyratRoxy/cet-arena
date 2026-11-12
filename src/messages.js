@@ -13,7 +13,8 @@ const fs = require('fs');
 const path = require('path');
 
 const MAX_CONTENT = 50;
-const MAX_PER_DEVICE = 20;
+// 动态配额：同一设备「未处理」留言的并发上限，站长处理后自动归还额度。
+const MAX_PER_DEVICE = 5;
 const MIN_INTERVAL_MS = 5_000;
 
 function readJson(file, fallback) {
@@ -91,11 +92,14 @@ function createMessageStore(options = {}) {
     const deviceHash = crypto.createHash('sha256').update(token).digest('hex');
 
     const mine = db.messages.filter((item) => item.deviceHash === deviceHash);
-    if (mine.length >= maxPerDevice) {
+
+    // 动态配额：只统计「未处理」的留言。站长标记已处理或删除后，额度自动归还。
+    const pending = mine.filter((item) => item.status !== 'handled');
+    if (pending.length >= maxPerDevice) {
       return {
         ok: false,
         code: 'LIMIT',
-        message: `每台设备最多留言 ${maxPerDevice} 条，已用满`,
+        message: `您的留言额度已用完（最多${maxPerDevice}条），请等待站长处理后再试`,
       };
     }
 

@@ -8,7 +8,7 @@
     vip: 'cetArena.vip.v1',
     device: 'cetArena.deviceToken.v1',
   };
-  const APP_VERSION = '20261112-vip8';
+  const APP_VERSION = '20261112-vip9';
 
   const VIEW_IDS = ['loading', 'home', 'room', 'game', 'result', 'solo'];
   const LETTERS = ['A', 'B', 'C', 'D'];

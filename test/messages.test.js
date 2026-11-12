@@ -85,17 +85,48 @@ async function main() {
     ok('记录设备前 8 位', saved.devicePrefix === DEVICE_A.slice(0, 8));
     ok('不保存完整设备 Token', !JSON.stringify(saved).includes(DEVICE_A));
 
-    console.log('=== 2. 每台设备最多 20 条 ===');
+    console.log('=== 2. 动态配额：最多 5 条未处理 ===');
     store = freshStore();
     let added = 0;
-    for (let i = 0; i < 20; i += 1) {
+    for (let i = 0; i < 5; i += 1) {
       if (store.add({ content: `第 ${i + 1} 条留言`, deviceToken: DEVICE_A }).ok) added += 1;
     }
-    ok('前 20 条全部写入', added === 20, String(added));
-    const overflow = store.add({ content: '第 21 条', deviceToken: DEVICE_A });
-    ok('第 21 条被限流', overflow.ok === false && overflow.code === 'LIMIT');
+    ok('前 5 条全部写入', added === 5, String(added));
+    const overflow = store.add({ content: '第 6 条', deviceToken: DEVICE_A });
+    ok('第 6 条被限流', overflow.ok === false && overflow.code === 'LIMIT');
+    ok(
+      '限流文案符合新规则',
+      overflow.message === '您的留言额度已用完（最多5条），请等待站长处理后再试',
+      overflow.message
+    );
     ok('另一台设备不受影响', store.add({ content: '别的设备', deviceToken: DEVICE_B }).ok === true);
-    ok('限流后文件仍是 21 条', readFile().messages.length === 21);
+    ok('限流后文件仍是 6 条', readFile().messages.length === 6);
+
+    console.log('=== 2.1 处理 / 删除后额度自动归还 ===');
+    store = freshStore();
+    const ids = [];
+    for (let i = 0; i < 5; i += 1) {
+      const result = store.add({ content: `待处理 ${i + 1}`, deviceToken: DEVICE_A });
+      ids.push(result.record.id);
+    }
+    ok('先占满 5 条额度', store.add({ content: '超额', deviceToken: DEVICE_A }).code === 'LIMIT');
+
+    store.markHandled(ids[0], true);
+    ok('标记已处理后可以再发一条', store.add({ content: '处理后续发', deviceToken: DEVICE_A }).ok === true);
+    ok('再次占满后被限流', store.add({ content: '又超额', deviceToken: DEVICE_A }).code === 'LIMIT');
+
+    store.remove(ids[1]);
+    ok('删除一条后额度再归还 1', store.add({ content: '删除后续发', deviceToken: DEVICE_A }).ok === true);
+
+    const pendingCount = readFile().messages.filter(
+      (item) => item.deviceHash && item.status !== 'handled'
+    ).length;
+    ok('未处理数不超过 5', pendingCount <= 5, String(pendingCount));
+    ok('已处理的历史留言不占额度', readFile().messages.length === 6, String(readFile().messages.length));
+
+    const reopened = store.markHandled(ids[2], false);
+    ok('已处理可恢复为待处理', reopened.ok === true);
+    ok('恢复后重新占用额度', store.add({ content: '恢复后检查', deviceToken: DEVICE_A }).code === 'LIMIT');
 
     console.log('=== 3. 防重复提交（冷却）===');
     store = freshStore({ minIntervalMs: 3000 });

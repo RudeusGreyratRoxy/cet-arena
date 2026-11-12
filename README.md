@@ -25,7 +25,7 @@
 - 发音：**本地 MP3**（`/audio/<word>.mp3`，微软神经网络语音 `en-US-JennyNeural`，24kHz 单声道 48kbps，平均 ~9KB/词，全量 ~26MB）。听音选词自动播放一次（失败时点喇叭兜底），英译中可点喇叭。**已彻底废弃 `speechSynthesis`**——HTTP 环境下 `secureContext=false`，多数手机浏览器直接禁用该 API。
 - 声音唤醒：进入准备页/对局后，页面顶部会出现「🔊 点击唤醒声音」；点一下播放 0.5 秒静音 MP3 换取移动端播放权限，成功后自动消失。
 - 音频强缓存：`/audio/` 走 `Cache-Control: public, max-age=31536000, immutable`，手机下过一次后一年内不再回源（服务器带宽仅 4M，这层很关键）。
-- 联系站长：首页右下角悬浮按钮，点开可写最多 50 字留言；按 `device_token` 限制每台设备 20 条，服务器落 `data/messages.json`；后台「留言管理」标签页可按时间倒序查看、标记已处理、删除。
+- 联系站长：首页右下角悬浮按钮，点开可写最多 50 字留言；按 `device_token` 做**动态配额**——同一设备**同时最多 5 条「未处理」**留言，站长标记已处理或删除后额度自动归还；服务器落 `data/messages.json`；后台「留言管理」标签页可按时间倒序查看、标记已处理、删除。
 - 复盘：展示单词拼写、词性、完整释义、对错/未作答；答错后纠正的题仍标红；竞速另含双方进度、用时、错误数
 - 错词本：答错的单词自动存入浏览器 localStorage；单人「错词挑战」只考错词，**连续答对 3 次**才移出
 - 网络：顶部实时显示 Ping；>200ms 黄色、>500ms 红色；断线自动快速重连
@@ -485,7 +485,7 @@ cet-arena/
 │  ├─ solo.test.js          # 单人挑战服务端协议（出题/判分/退出）
 │  ├─ vip.test.js           # 激活码（特殊码/一码一设备/设备 Token/并发/建房闸门）
 │  ├─ admin.test.js         # 站长后台（鉴权/列卡密/生成/解绑/爆破锁定）
-│  ├─ messages.test.js      # 留言板（内容校验/20 条限流/落盘/后台处理）
+│  ├─ messages.test.js      # 留言板（内容校验/动态配额/额度归还/落盘/后台处理）
 │  ├─ solo-ui.test.js       # 前端假 DOM 集成（错词写入、着色、自动发音、答后释义）
 │  ├─ dom-contract.test.js  # DOM id 与脚本加载顺序契约
 │  └─ remote-smoke.js       # 公网 WebSocket 完整验收
@@ -521,7 +521,7 @@ cet-arena/
 - **预加载策略**：题目到达时立刻 `preload="auto"` 拉取该词音频，200ms 后再播放，通常首帧已在本地。**不做整局预取**——`中译英`/`听音选词` 的单词就是答案，提前下发会泄露答案，只能在题目到达后取。
 - **自动播放兜底**：`audio.play()` 返回的 Promise 被拒（自动播放策略）时不弹错误，只给 🔊 按钮加 `is-nudge` 动画；`play()` 成功才把 `audioUnlocked` 置真。
 - **声音唤醒引导**：微信内置 / UC / 部分 Android 浏览器在用户手势前禁止播放。准备页/对局页顶部显示「🔊 点击唤醒声音」，点击后在同步手势调用链里播放 0.5 秒静音 MP3；`play()` resolve 即解锁并隐藏按钮，reject 则保留按钮提示重试。
-- **留言板存储与限流**：`data/messages.json`（已 gitignore）保存 `{ id, content, deviceHash, devicePrefix, ip, createdAt, status }`；内容去掉控制字符并压缩空白，按 **码点** 计算长度，超过 50 字拒绝。限流按 `device_token` 的 SHA-256 计数，每台设备最多 20 条，另加 5 秒冷却防连点。只落设备 Token 前 8 位与哈希，不保存完整凭据。公开入口走 socket `message:create`（无需激活码），后台读取/处理/删除走受密码保护的 `/api/admin/messages*`。
+- **留言板存储与动态配额**：`data/messages.json`（已 gitignore）保存 `{ id, content, deviceHash, devicePrefix, ip, createdAt, status }`；内容去掉控制字符并压缩空白，按 **码点** 计算长度，超过 50 字拒绝。配额按 `device_token` 的 SHA-256 **实时统计「未处理」条数**（`status !== 'handled'`），同一设备**同时最多 5 条未处理**留言；站长标记已处理或删除后，未处理数下降，额度自动归还。另加 5 秒冷却防连点。只落设备 Token 前 8 位与哈希，不保存完整凭据。公开入口走 socket `message:create`（无需激活码），后台读取/处理/删除走受密码保护的 `/api/admin/messages*`。
 - **重连**：创建/加入时返回随机 `sessionId`，刷新后 `room:resume` 恢复；竞速模式还会补发个人当前题、进度与惩罚截止时间。
 - **房间回收**：双方都离线时不再死等 30 分钟——对局已结束的房间**立即删除**；进行中的对局保留 `emptyRoomGraceMs`（默认 **60 秒**，移动端切后台/弱网重连留足时间）供「刷新重连」，期间有人通过 `room:resume` 回来就取消回收；60 秒兜底扫描仅作为最后保险。`deleteRoom` 会一并清理子定时器、`sessions`、`socketPlayers`、`socket.data.roomCode` 并 `io.socketsLeave(room.code)`，不留幽灵连接。
 - **激活码存储**：`data/vip_codes.json` 只存放种子卡密（入库，`type` 为 `unlimited` 或 `once`）；运行状态（`used` / `boundDevice` / `boundIp` / `lastIp` / `usedAt`）写入 `data/vip_codes.state.json`（已 gitignore），先写临时文件再 rename，保证原子性，也避免 `git pull` 与线上状态冲突。
@@ -632,7 +632,8 @@ cet-arena/
 - [x] 首页右下角显示「遇到问题？联系站长」，其他视图不显示
 - [x] 留言内容为空 / 超过 50 字被前端与服务端双重拦截
 - [x] 输入框实时显示 `n / 50` 字数
-- [x] 同一 `device_token` 最多留言 20 条，第 21 条被拒
+- [x] 同一 `device_token` 同时最多 5 条未处理留言，第 6 条被拒
+- [x] 站长标记已处理 / 删除后，该设备额度自动归还 1 次
 - [x] 5 秒内重复提交被拒（防连点）
 - [x] 留言写入 `data/messages.json`，重读服务后仍在
 - [x] 后台「留言管理」按时间倒序展示，含待处理状态、设备前 8 位、IP、时间
@@ -713,7 +714,7 @@ cet-arena/
 
 **联系站长的留言发不出去**
 
-- 每台设备最多 20 条，用满后需要等站长处理或换设备；同一台设备两次留言至少间隔 5 秒（防连点）；
+- 每台设备**同时最多 5 条未处理**留言，用满后需等站长处理（或删除）后额度才恢复；同一台设备两次留言至少间隔 5 秒（防连点）；
 - 内容不能为空、最多 50 字，输入框下方有实时字数；
 - 留言写入服务器 `data/messages.json`（不入库），站长在后台「留言管理」标签页查看。
 
