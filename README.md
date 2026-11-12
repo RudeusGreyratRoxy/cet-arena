@@ -351,7 +351,8 @@ cd /opt/cet-arena && git pull && pm2 restart cet-arena
 - 进程守护：`pm2 save` + `pm2 startup systemd -u ubuntu`，服务器重启后自动拉起；
 - 日志轮转：`pm2-logrotate`（10M 上限、保留 5 份）；
 - 审计日志：`pm2 logs cet-arena --nostream | grep '\[audit\]'` 可查连接/IP/昵称/房间码/断开原因；
-- 激活码：新增卡密改 `data/vip_codes.json`，`type` 为 `unlimited`（站长/专属，不限次不绑 IP）或 `once`（普通单人码，一码一用）；重置某个码的「已用/绑定」状态，删 `data/vip_codes.state.json` 里对应键即可，改完重启 PM2；
+- 激活码：新增卡密改 `data/vip_codes.json`，`type` 为 `unlimited`（站长/专属，不限次不绑 IP）或 `once`（普通单人码，一码一用）；重置某个码的「已用/绑定」状态，删 `data/vip_codes.state.json` 里对应键即可，改完重启 PM2；**线上已改为直接在 `/admin` 后台操作，无需再登录服务器改文件**；
+- 站长后台密码：由 PM2 环境变量 `ADMIN_PASSWORD` 提供，**不写进代码和仓库**（`src/adminAuth.js` 里的默认值仅本地开发占位）。轮换：`ADMIN_PASSWORD='新密码' pm2 restart cet-arena --update-env && pm2 save`；复核是否生效：`PID=$(pm2 pid cet-arena)` 后 `tr '\0' '\n' < /proc/$PID/environ | grep ADMIN_PASSWORD`；
 - 健康检查：`curl http://127.0.0.1:3000/healthz`，返回 `{"ok":true,"words":2868,...}`；
 - 词库/代码更新后必须重启 PM2，服务只在启动时读取 `data/words.json`。
 
