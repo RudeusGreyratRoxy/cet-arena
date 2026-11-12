@@ -910,6 +910,38 @@ async function scenarioFreeTierLock() {
   assert(cards[3].classList.contains('is-locked'), '占位卡片应有不可点击样式');
   assert(!cards[3]._has('click'), '占位卡片不应绑定点击事件');
   console.log('  ✓ 闯关列表可进，第 4 关为灰色占位');
+
+  // 回归：点击第 1 关必须真正进入答题页。
+  // 曾因 el 映射漏注册 trialPlay，startTrial 里 el.trialPlay.hidden 抛 TypeError，
+  // 异常发生在 setView 之前，表现为「点了完全没反应」。
+  env.ackHandlers.set('trial:start', () => ({
+    ok: true,
+    chapter: { id: 'L1', title: '第 1 关 · 基础闯关' },
+    total: 10,
+    timeLimitMs: 10000,
+    question: {
+      index: 1,
+      total: 10,
+      id: 'cet4_0001',
+      word: 'abandon',
+      level: 'CET4',
+      type: 'en2zh',
+      prompt: 'abandon',
+      promptLabel: '选择正确的中文释义',
+      options: ['v. 放弃；抛弃', 'n. 放任；狂热', 'adj. 绝对的', 'v. 吸收'],
+      timeLimitMs: 10000,
+      deadline: Date.now() + 10000,
+      serverNow: Date.now(),
+    },
+  }));
+  cards[0]._fire('click');
+  await flush();
+
+  assert.equal(env.document.body.dataset.view, 'trial', '点击第 1 关应进入答题页');
+  assert.equal(env.el('trialOptions').children.length, 4, '答题页应渲染 4 个选项');
+  assert.equal(env.el('trialProgress').textContent, '1 / 10', '题号应为 1 / 10');
+  assert.equal(env.el('trialTimer').textContent, '10', '倒计时应从 10 秒开始');
+  console.log('  ✓ 点击第 1 关可进入答题页并渲染倒计时');
 }
 
 (async () => {

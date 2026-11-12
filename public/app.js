@@ -8,7 +8,7 @@
     vip: 'cetArena.vip.v1',
     device: 'cetArena.deviceToken.v1',
   };
-  const APP_VERSION = '20261112-vip10';
+  const APP_VERSION = '20261112-vip11';
 
   const VIEW_IDS = ['loading', 'home', 'room', 'game', 'result', 'solo', 'levels', 'trial'];
   const LETTERS = ['A', 'B', 'C', 'D'];
@@ -67,6 +67,8 @@
     trialOptions: document.getElementById('trialOptions'),
     trialReveal: document.getElementById('trialReveal'),
     trialFeedback: document.getElementById('trialFeedback'),
+    // 答题区容器：startTrial 里要切显隐，漏注册会直接抛 TypeError 导致点击无反应。
+    trialPlay: document.getElementById('trialPlay'),
     trialSummary: document.getElementById('trialSummary'),
     trialSummaryTitle: document.getElementById('trialSummaryTitle'),
     trialSummaryCopy: document.getElementById('trialSummaryCopy'),
