@@ -298,7 +298,7 @@ const flush = async (rounds = 6) => {
 
 async function scenarioEmptyBook() {
   console.log('=== 场景 1：错词本为空 ===');
-  const env = createEnv({ seedVip: '080323' });
+  const env = createEnv({ seedVip: 'TESTSECRET2' });
   await flush();
   await flush();
 
@@ -320,7 +320,7 @@ async function scenarioEmptyBook() {
 
 async function scenarioMastery() {
   console.log('=== 场景 2：连对 3 次移出错词本 ===');
-  const env = createEnv({ seedVip: '080323' });
+  const env = createEnv({ seedVip: 'TESTSECRET2' });
   await flush();
 
   // 预置一本只有 1 个词的错词本
@@ -420,7 +420,7 @@ async function scenarioMastery() {
 
 async function scenarioWrongResetsStreak() {
   console.log('=== 场景 3：中途答错清零 ===');
-  const env = createEnv({ seedVip: '080323' });
+  const env = createEnv({ seedVip: 'TESTSECRET2' });
   await flush();
   env.localStorage.setItem(
     'cetArena.wrongBook.v1',
@@ -478,7 +478,7 @@ async function scenarioWrongResetsStreak() {
 
 async function scenarioSoloListen() {
   console.log('=== 场景 5：单人听音题（自动发音 + 答后中文释义 + 着色） ===');
-  const env = createEnv({ speech: true, seedVip: '080323' });
+  const env = createEnv({ speech: true, seedVip: 'TESTSECRET2' });
   await flush();
   env.localStorage.setItem(
     'cetArena.wrongBook.v1',
@@ -542,7 +542,7 @@ async function scenarioMultiplayerListen() {
   console.log('=== 场景 6：双人听音题（自动发音 + 答后中文释义） ===');
   const env = createEnv({
     speech: true,
-    seedVip: '080323',
+    seedVip: 'TESTSECRET2',
     acks: { 'vip:verify': () => ({ ok: true, tier: 'super_admin' }) },
   });
   await flush();
@@ -614,7 +614,7 @@ async function scenarioMultiplayerListen() {
 
 async function scenarioSoloWrongColoring() {
   console.log('=== 场景 7：单人答错时的着色 ===');
-  const env = createEnv({ seedVip: '080323' });
+  const env = createEnv({ seedVip: 'TESTSECRET2' });
   await flush();
   env.localStorage.setItem(
     'cetArena.wrongBook.v1',
@@ -777,7 +777,7 @@ async function scenarioJoinNeedsCode() {
 async function scenarioResultStoresMistakes() {
   console.log('=== 场景 4：结算页答错的词自动入库 ===');
   const env = createEnv({
-    seedVip: '080323',
+    seedVip: 'TESTSECRET2',
     acks: { 'vip:verify': () => ({ ok: true, tier: 'super_admin' }) },
   });
   await flush();

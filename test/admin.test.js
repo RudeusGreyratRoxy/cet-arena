@@ -22,7 +22,7 @@ fs.writeFileSync(
   JSON.stringify({
     version: 1,
     codes: {
-      BOSS888: { type: 'unlimited', label: '站长' },
+      TESTSECRET1: { type: 'unlimited', label: '站长' },
       VIP888: { type: 'once', label: '单人码' },
       VIP666: { type: 'once', label: '单人码' },
     },
@@ -177,7 +177,7 @@ async function main() {
     const notBound = await http('POST', '/api/admin/codes/reset', { body: { code: 'VIP666' } });
     ok('解绑未使用的卡密被拒', notBound.status === 400 && notBound.data.code === 'NOT_BOUND');
 
-    const adminReset = await http('POST', '/api/admin/codes/reset', { body: { code: 'BOSS888' } });
+    const adminReset = await http('POST', '/api/admin/codes/reset', { body: { code: 'TESTSECRET1' } });
     ok('站长码不允许解绑', adminReset.status === 400 && adminReset.data.code === 'UNLIMITED');
 
     console.log('=== 6. 退出与防爆破 ===');

@@ -25,8 +25,8 @@ fs.writeFileSync(
   JSON.stringify({
     version: 1,
     codes: {
-      BOSS888: { type: 'unlimited', label: '站长' },
-      '080323': { type: 'unlimited', label: '专属永久' },
+      TESTSECRET1: { type: 'unlimited', label: '站长' },
+      'TESTSECRET2': { type: 'unlimited', label: '专属永久' },
       VIP888: { type: 'once', label: '单人码' },
       VIP666: { type: 'once', label: '单人码' },
       VIP777: { type: 'once', label: '并发测试' },
@@ -84,9 +84,9 @@ async function main() {
     console.log('=== 1. 特殊码 ===');
     resetState();
     const s1 = newStore();
-    ok('BOSS888 通过且不限次', s1.verify('BOSS888', '1.1.1.1').ok === true && s1.verify('BOSS888', '2.2.2.2').ok === true);
-    ok('080323 通过且不限次', s1.verify('080323', '3.3.3.3').ok === true && s1.verify('080323', '4.4.4.4').ok === true);
-    ok('特殊码不需要设备 Token', s1.verify('BOSS888', '5.5.5.5', '').ok === true);
+    ok('TESTSECRET1 通过且不限次', s1.verify('TESTSECRET1', '1.1.1.1').ok === true && s1.verify('TESTSECRET1', '2.2.2.2').ok === true);
+    ok('TESTSECRET2 通过且不限次', s1.verify('TESTSECRET2', '3.3.3.3').ok === true && s1.verify('TESTSECRET2', '4.4.4.4').ok === true);
+    ok('特殊码不需要设备 Token', s1.verify('TESTSECRET1', '5.5.5.5', '').ok === true);
     ok('特殊码不写绑定状态', !fs.existsSync(statePath));
 
     console.log('=== 2. 普通码：必须带设备 Token ===');
