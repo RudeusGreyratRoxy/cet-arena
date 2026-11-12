@@ -233,28 +233,27 @@ function createEnv(options = {}) {
   sandbox.self = sandbox;
   sandbox.io = () => createSocket();
 
-  // 可选：假语音引擎，用来断言「听音题自动播报」确实被触发。
+  // 假 <audio>：记录被播放的音频地址，用来断言「听音题自动播报」确实被触发。
+  // 正式实现已改为播放 /audio/<word>.mp3，不再依赖 speechSynthesis。
   const spoken = [];
-  if (options.speech) {
-    sandbox.SpeechSynthesisUtterance = function FakeUtterance(text) {
-      this.text = text;
-      this.lang = '';
-      this.rate = 1;
+  sandbox.Audio = function FakeAudio(src) {
+    this.src = src || '';
+    this.preload = '';
+    this.currentTime = 0;
+    this.volume = 1;
+    this.paused = true;
+    this.play = () => {
+      spoken.push(this.src);
+      this.paused = false;
+      return Promise.resolve();
     };
-    sandbox.speechSynthesis = {
-      paused: false,
-      speak(utterance) {
-        spoken.push(utterance.text);
-      },
-      cancel() {},
-      resume() {},
-      getVoices() {
-        return [{ lang: 'en-US', name: 'Fake English' }];
-      },
-      addEventListener() {},
-      removeEventListener() {},
+    this.pause = () => {
+      this.paused = true;
     };
-  }
+    this.load = () => {};
+    this.removeAttribute = () => {};
+    this.addEventListener = () => {};
+  };
 
   const context = vm.createContext(sandbox);
   vm.runInContext(wrongbookSource, context, { filename: 'wrongbook.js' });
@@ -506,8 +505,8 @@ async function scenarioSoloListen() {
   await flush();
 
   assert(
-    env.spoken.includes('breast'),
-    `听音题出现时应自动播报，实际播报：${JSON.stringify(env.spoken)}`
+    env.spoken.some((src) => src.includes('/audio/breast.mp3')),
+    `听音题出现时应自动播放对应 MP3，实际播放：${JSON.stringify(env.spoken)}`
   );
   console.log('  ✓ 题目出现后自动播放发音（静默失败不影响使用）');
 
@@ -570,7 +569,10 @@ async function scenarioMultiplayerListen() {
   env.flushTimers();
   await flush();
 
-  assert(env.spoken.includes('breast'), '双人听音题也应自动播报');
+  assert(
+    env.spoken.some((src) => src.includes('/audio/breast.mp3')),
+    '双人听音题也应自动播放对应 MP3'
+  );
   console.log('  ✓ 双人对战听音题自动播放发音');
 
   env.ackHandlers.set('game:answer', () => ({

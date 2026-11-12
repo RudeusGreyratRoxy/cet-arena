@@ -32,6 +32,16 @@
     tableHint: el('tableHint'),
     codeRows: el('codeRows'),
     emptyHint: el('emptyHint'),
+    tabCodes: el('tabCodes'),
+    tabMessages: el('tabMessages'),
+    panelCodes: el('panelCodes'),
+    panelMessages: el('panelMessages'),
+    messageBadge: el('messageBadge'),
+    messageList: el('messageList'),
+    messageHint: el('messageHint'),
+    messageEmpty: el('messageEmpty'),
+    filterAll: el('filterAll'),
+    filterPending: el('filterPending'),
     toast: el('toast'),
   };
 
@@ -42,6 +52,10 @@
     created: [],
     busy: false,
     pollTimer: null,
+    activeTab: 'codes',
+    messages: [],
+    messageStats: { total: 0, pending: 0 },
+    messageFilter: 'all',
   };
 
   // ---------------------------------------------------------------- 工具
@@ -260,6 +274,152 @@
     ui.genResult.hidden = created.length === 0;
   }
 
+  // ---------------------------------------------------------------- 标签页 & 留言
+
+  function switchTab(tab) {
+    state.activeTab = tab === 'messages' ? 'messages' : 'codes';
+    const isMessages = state.activeTab === 'messages';
+    ui.panelCodes.hidden = isMessages;
+    ui.panelMessages.hidden = !isMessages;
+    ui.tabCodes.classList.toggle('is-active', !isMessages);
+    ui.tabMessages.classList.toggle('is-active', isMessages);
+    ui.tabCodes.setAttribute('aria-selected', String(!isMessages));
+    ui.tabMessages.setAttribute('aria-selected', String(isMessages));
+    if (isMessages) loadMessages();
+  }
+
+  function updateMessageBadge() {
+    if (!ui.messageBadge) return;
+    const pending = Number(state.messageStats && state.messageStats.pending) || 0;
+    ui.messageBadge.hidden = pending <= 0;
+    ui.messageBadge.textContent = pending > 99 ? '99+' : String(pending);
+  }
+
+  function buildMessageItem(item) {
+    const handled = item.status === 'handled';
+    const li = document.createElement('li');
+    li.className = 'msg-item' + (handled ? ' is-handled' : '');
+
+    const head = document.createElement('div');
+    head.className = 'msg-head';
+    head.appendChild(textSpan(handled ? '已处理' : '待处理', `tag ${handled ? 'free' : 'used'}`));
+    head.appendChild(textSpan(formatTime(item.createdAt), 'msg-time'));
+    li.appendChild(head);
+
+    const content = document.createElement('p');
+    content.className = 'msg-content';
+    content.textContent = item.content;
+    li.appendChild(content);
+
+    const meta = document.createElement('div');
+    meta.className = 'msg-meta';
+    meta.appendChild(textSpan(`设备 ${item.devicePrefix || '—'}`, ''));
+    meta.appendChild(textSpan(`IP ${item.ip || '—'}`, ''));
+    li.appendChild(meta);
+
+    const actions = document.createElement('div');
+    actions.className = 'msg-actions';
+
+    const handleBtn = document.createElement('button');
+    handleBtn.type = 'button';
+    handleBtn.className = 'btn tiny';
+    handleBtn.textContent = handled ? '标为待处理' : '标记已处理';
+    handleBtn.dataset.handle = item.id;
+    handleBtn.dataset.next = handled ? '0' : '1';
+    actions.appendChild(handleBtn);
+
+    const delBtn = document.createElement('button');
+    delBtn.type = 'button';
+    delBtn.className = 'btn danger';
+    delBtn.textContent = '删除';
+    delBtn.dataset.delete = item.id;
+    actions.appendChild(delBtn);
+
+    li.appendChild(actions);
+    return li;
+  }
+
+  function renderMessages() {
+    const pendingOnly = state.messageFilter === 'pending';
+    const visible = pendingOnly
+      ? state.messages.filter((item) => item.status !== 'handled')
+      : state.messages;
+
+    ui.messageList.textContent = '';
+    for (const item of visible) {
+      ui.messageList.appendChild(buildMessageItem(item));
+    }
+
+    ui.messageEmpty.hidden = visible.length > 0 || state.messages.length === 0;
+    if (state.messages.length === 0) {
+      ui.messageHint.textContent = '还没有收到留言。';
+    } else {
+      const pending = Number(state.messageStats && state.messageStats.pending) || 0;
+      ui.messageHint.textContent =
+        `共 ${state.messages.length} 条，待处理 ${pending} 条，当前显示 ${visible.length} 条`;
+    }
+    updateMessageBadge();
+  }
+
+  async function loadMessages() {
+    const res = await request('/api/admin/messages');
+    if (res.status === 401) {
+      showLogin('登录已过期，请重新登录');
+      return;
+    }
+    if (!res.ok) {
+      toast(res.data.message || '留言加载失败');
+      return;
+    }
+    state.messages = Array.isArray(res.data.messages) ? res.data.messages : [];
+    state.messageStats = res.data.stats || { total: 0, pending: 0 };
+    renderMessages();
+  }
+
+  async function handleMessage(id, handled) {
+    if (!id || state.busy) return;
+    setBusy(true);
+    const res = await request('/api/admin/messages/handle', {
+      method: 'POST',
+      body: { id, handled },
+    });
+    setBusy(false);
+    if (res.status === 401) {
+      showLogin('登录已过期，请重新登录');
+      return;
+    }
+    if (!res.ok) {
+      toast(res.data.message || '操作失败');
+      return;
+    }
+    const item = state.messages.find((entry) => entry.id === id);
+    if (item) item.status = handled ? 'handled' : 'new';
+    state.messageStats = res.data.stats || state.messageStats;
+    renderMessages();
+    toast(handled ? '已标记为已处理' : '已恢复为待处理');
+  }
+
+  async function deleteMessage(id) {
+    if (!id || state.busy) return;
+    const confirmed = window.confirm('确定删除这条留言吗？删除后无法恢复。');
+    if (!confirmed) return;
+    setBusy(true);
+    const res = await request('/api/admin/messages/delete', { method: 'POST', body: { id } });
+    setBusy(false);
+    if (res.status === 401) {
+      showLogin('登录已过期，请重新登录');
+      return;
+    }
+    if (!res.ok) {
+      toast(res.data.message || '删除失败');
+      return;
+    }
+    state.messages = state.messages.filter((entry) => entry.id !== id);
+    state.messageStats = res.data.stats || state.messageStats;
+    renderMessages();
+    toast('已删除');
+  }
+
   function render() {
     renderStats();
     renderTable();
@@ -279,15 +439,19 @@
     state.codes = Array.isArray(res.data.codes) ? res.data.codes : [];
     state.stats = res.data.stats || null;
     state.live = res.data.live || null;
+    if (res.data.messages) state.messageStats = res.data.messages;
     showAdmin();
     render();
+    updateMessageBadge();
   }
 
   function startPolling() {
     stopPolling();
     state.pollTimer = setInterval(() => {
       if (state.busy || document.hidden) return;
-      loadState();
+      loadState().then(() => {
+        if (state.activeTab === 'messages') loadMessages();
+      });
     }, 30_000);
   }
 
@@ -382,11 +546,33 @@
     toast(`卡密 ${code} 已解绑，可重新激活`);
   }
 
+  function setMessageFilter(filter) {
+    state.messageFilter = filter === 'pending' ? 'pending' : 'all';
+    ui.filterAll.classList.toggle('is-active', state.messageFilter === 'all');
+    ui.filterPending.classList.toggle('is-active', state.messageFilter === 'pending');
+    renderMessages();
+  }
+
   function bindEvents() {
     ui.loginForm.addEventListener('submit', handleLogin);
     ui.logoutBtn.addEventListener('click', handleLogout);
     ui.genBtn.addEventListener('click', handleGenerate);
     ui.searchInput.addEventListener('input', renderTable);
+
+    ui.tabCodes.addEventListener('click', () => switchTab('codes'));
+    ui.tabMessages.addEventListener('click', () => switchTab('messages'));
+    ui.filterAll.addEventListener('click', () => setMessageFilter('all'));
+    ui.filterPending.addEventListener('click', () => setMessageFilter('pending'));
+
+    ui.messageList.addEventListener('click', (event) => {
+      const handleBtn = event.target.closest('button[data-handle]');
+      if (handleBtn) {
+        handleMessage(handleBtn.dataset.handle, handleBtn.dataset.next === '1');
+        return;
+      }
+      const delBtn = event.target.closest('button[data-delete]');
+      if (delBtn) deleteMessage(delBtn.dataset.delete);
+    });
 
     ui.codeRows.addEventListener('click', (event) => {
       const resetButton = event.target.closest('button[data-reset]');

@@ -9,7 +9,8 @@
       content="CET Arena：仅限两位好友通过 6 位房间码实时对战的四六级词汇竞技游戏。"
     />
     <title>CET Arena · 双人词汇对战</title>
-    <link rel="stylesheet" href="/styles.css?v=20261112-vip5" />
+    <link rel="icon" href="data:,">
+    <link rel="stylesheet" href="/styles.css?v=20261112-vip8" />
   </head>
   <body data-view="loading">
     <div class="ambient ambient-one" aria-hidden="true"></div>
@@ -369,7 +370,7 @@
               <strong>双人成行</strong>
               <span class="vip-price">￥29.9</span>
             </div>
-            <p class="vip-package-desc">含 2 个独立激活码，各自绑定 IP，适合和室友互加</p>
+            <p class="vip-package-desc">含 2 个独立激活码，各自绑定设备，适合和室友互加</p>
             <button class="vip-pay" type="button" data-package="duo">立即开通</button>
           </div>
 
@@ -391,10 +392,40 @@
       </div>
     </div>
 
+    <!-- 声音唤醒：部分手机浏览器（微信内置 / UC 等）在用户手势前禁止发音 -->
+    <button class="audio-unlock" id="audioUnlockBtn" type="button" hidden>
+      🔊 点击唤醒声音
+    </button>
+
+    <!-- 首页右下角：联系站长留言入口 -->
+    <button class="contact-fab" id="contactFab" type="button" hidden>
+      <span aria-hidden="true">💬</span> 遇到问题？联系站长
+    </button>
+
+    <div class="contact-overlay" id="contactOverlay" hidden>
+      <div class="contact-modal" role="dialog" aria-modal="true" aria-labelledby="contactTitle">
+        <button class="contact-close" id="contactCloseBtn" type="button" aria-label="关闭">×</button>
+        <h2 class="contact-title" id="contactTitle">联系站长</h2>
+        <p class="contact-hint">遇到问题、或者想提建议，都可以写在这里（最多 50 字）。</p>
+        <textarea
+          id="contactInput"
+          class="contact-input"
+          maxlength="50"
+          rows="3"
+          placeholder="请简单描述你遇到的问题…"
+        ></textarea>
+        <div class="contact-meta">
+          <span class="contact-count" id="contactCount">0 / 50</span>
+          <button class="contact-submit" id="contactSubmitBtn" type="button">发送</button>
+        </div>
+        <p class="contact-error" id="contactError" role="alert" hidden></p>
+      </div>
+    </div>
+
     <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
 
     <script src="/socket.io/socket.io.min.js"></script>
-    <script src="/wrongbook.js?v=20261112-vip5"></script>
-    <script src="/app.js?v=20261112-vip5"></script>
+    <script src="/wrongbook.js?v=20261112-vip8"></script>
+    <script src="/app.js?v=20261112-vip8"></script>
   </body>
 </html>

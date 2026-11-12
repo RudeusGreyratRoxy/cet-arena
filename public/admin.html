@@ -38,68 +38,92 @@
         <button id="logoutBtn" class="btn ghost" type="button">退出</button>
       </header>
 
-      <div class="stats">
-        <div class="stat">
-          <span class="stat-value" id="statTotal">0</span>
-          <span class="stat-label">卡密总数</span>
+      <nav class="tabs" role="tablist">
+        <button class="tab is-active" id="tabCodes" data-tab="codes" role="tab" aria-selected="true" type="button">卡密管理</button>
+        <button class="tab" id="tabMessages" data-tab="messages" role="tab" aria-selected="false" type="button">
+          留言管理<span class="tab-badge" id="messageBadge" hidden>0</span>
+        </button>
+      </nav>
+
+      <div id="panelCodes">
+        <div class="stats">
+          <div class="stat">
+            <span class="stat-value" id="statTotal">0</span>
+            <span class="stat-label">卡密总数</span>
+          </div>
+          <div class="stat">
+            <span class="stat-value" id="statAvailable">0</span>
+            <span class="stat-label">未使用</span>
+          </div>
+          <div class="stat">
+            <span class="stat-value" id="statUsed">0</span>
+            <span class="stat-label">已绑定</span>
+          </div>
+          <div class="stat">
+            <span class="stat-value" id="statPlayers">0</span>
+            <span class="stat-label">在线玩家</span>
+          </div>
         </div>
-        <div class="stat">
-          <span class="stat-value" id="statAvailable">0</span>
-          <span class="stat-label">未使用</span>
-        </div>
-        <div class="stat">
-          <span class="stat-value" id="statUsed">0</span>
-          <span class="stat-label">已绑定</span>
-        </div>
-        <div class="stat">
-          <span class="stat-value" id="statPlayers">0</span>
-          <span class="stat-label">在线玩家</span>
-        </div>
+
+        <section class="card">
+          <h2>生成新卡密</h2>
+          <p class="muted small">6 位大写字母 + 数字，自动去重并写入 vip_codes.json，立即可用。</p>
+          <div class="generate-row">
+            <label class="field grow">
+              <span>生成数量</span>
+              <input id="genCount" type="number" min="1" max="100" step="1" value="1" inputmode="numeric">
+            </label>
+            <button id="genBtn" class="btn primary" type="button">一键生成</button>
+          </div>
+          <div id="genResult" class="gen-result" hidden>
+            <div class="gen-result-head">
+              <span id="genMessage"></span>
+              <button id="copyGenBtn" class="btn tiny" type="button">复制全部</button>
+            </div>
+            <ul id="genList" class="gen-list"></ul>
+          </div>
+        </section>
+
+        <section class="card">
+          <div class="list-head">
+            <h2>卡密列表</h2>
+            <input id="searchInput" class="search" type="search" placeholder="搜索卡密 / IP" autocomplete="off">
+          </div>
+          <p id="tableHint" class="muted small"></p>
+          <div class="table-wrap">
+            <table class="codes">
+              <thead>
+                <tr>
+                  <th>卡密</th>
+                  <th>类型</th>
+                  <th>状态</th>
+                  <th>绑定 IP</th>
+                  <th>绑定设备</th>
+                  <th>绑定时间</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody id="codeRows"></tbody>
+            </table>
+          </div>
+          <p id="emptyHint" class="muted" hidden>没有匹配的卡密。</p>
+        </section>
       </div>
 
-      <section class="card">
-        <h2>生成新卡密</h2>
-        <p class="muted small">6 位大写字母 + 数字，自动去重并写入 vip_codes.json，立即可用。</p>
-        <div class="generate-row">
-          <label class="field grow">
-            <span>生成数量</span>
-            <input id="genCount" type="number" min="1" max="100" step="1" value="1" inputmode="numeric">
-          </label>
-          <button id="genBtn" class="btn primary" type="button">一键生成</button>
-        </div>
-        <div id="genResult" class="gen-result" hidden>
-          <div class="gen-result-head">
-            <span id="genMessage"></span>
-            <button id="copyGenBtn" class="btn tiny" type="button">复制全部</button>
+      <div id="panelMessages" hidden>
+        <section class="card">
+          <div class="list-head">
+            <h2>留言管理</h2>
+            <div class="msg-filter">
+              <button class="btn tiny is-active" id="filterAll" type="button">全部</button>
+              <button class="btn tiny" id="filterPending" type="button">待处理</button>
+            </div>
           </div>
-          <ul id="genList" class="gen-list"></ul>
-        </div>
-      </section>
-
-      <section class="card">
-        <div class="list-head">
-          <h2>卡密列表</h2>
-          <input id="searchInput" class="search" type="search" placeholder="搜索卡密 / IP" autocomplete="off">
-        </div>
-        <p id="tableHint" class="muted small"></p>
-        <div class="table-wrap">
-          <table class="codes">
-            <thead>
-              <tr>
-                <th>卡密</th>
-                <th>类型</th>
-                <th>状态</th>
-                <th>绑定 IP</th>
-                <th>绑定设备</th>
-                <th>绑定时间</th>
-                <th>操作</th>
-              </tr>
-            </thead>
-            <tbody id="codeRows"></tbody>
-          </table>
-        </div>
-        <p id="emptyHint" class="muted" hidden>没有匹配的卡密。</p>
-      </section>
+          <p id="messageHint" class="muted small"></p>
+          <ul id="messageList" class="msg-list"></ul>
+          <p id="messageEmpty" class="muted" hidden>还没有收到留言。</p>
+        </section>
+      </div>
     </section>
 
     <div id="toast" class="toast" hidden role="status"></div>

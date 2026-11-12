@@ -1,6 +1,8 @@
 'use strict';
 
+const os = require('os');
 const { createArenaServer } = require('./src/app');
+const { APP_VERSION } = require('./src/version');
 
 const port = Number(process.env.PORT) || 3000;
 const host = process.env.HOST || '0.0.0.0';
@@ -8,10 +10,29 @@ const host = process.env.HOST || '0.0.0.0';
 const arena = createArenaServer();
 const { httpServer, io } = arena;
 
+/** 找出本机局域网 IPv4，方便手机同 WiFi 直连。 */
+function lanAddresses() {
+  const result = [];
+  const interfaces = os.networkInterfaces();
+  for (const [name, list] of Object.entries(interfaces)) {
+    for (const item of list || []) {
+      if (item.family === 'IPv4' && !item.internal) {
+        result.push({ name, address: item.address });
+      }
+    }
+  }
+  return result;
+}
+
 httpServer.listen(port, host, () => {
   console.log('');
   console.log('  CET Arena 已启动');
+  console.log(`  版本号:     ${APP_VERSION}`);
+  console.log(`  监听地址:   ${host}:${port}`);
   console.log(`  本机访问:   http://localhost:${port}`);
+  for (const entry of lanAddresses()) {
+    console.log(`  手机访问:   http://${entry.address}:${port}   (${entry.name})`);
+  }
   console.log(`  健康检查:   http://localhost:${port}/healthz`);
   console.log('  按 Ctrl+C 停止服务');
   console.log('');

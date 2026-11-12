@@ -46,6 +46,12 @@ const required = [
   'soloAgainBtn',
   'soloHomeBtn',
   'soloSpeakBtn',
+  'audioUnlockBtn',
+  'contactFab',
+  'contactOverlay',
+  'contactInput',
+  'contactSubmitBtn',
+  'contactCount',
 ];
 const absent = required.filter((id) => !htmlIds.has(id));
 assert.deepEqual(absent, [], `错词挑战缺少必要 DOM 节点：${absent.join(', ')}`);

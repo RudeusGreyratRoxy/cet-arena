@@ -8,7 +8,7 @@
     vip: 'cetArena.vip.v1',
     device: 'cetArena.deviceToken.v1',
   };
-  const APP_VERSION = '20261112-vip5';
+  const APP_VERSION = '20261112-vip8';
 
   const VIEW_IDS = ['loading', 'home', 'room', 'game', 'result', 'solo'];
   const LETTERS = ['A', 'B', 'C', 'D'];
@@ -99,6 +99,14 @@
     vipCloseBtn: document.getElementById('vipCloseBtn'),
     vipPayCloseBtn: document.getElementById('vipPayCloseBtn'),
     vipClearBtn: document.getElementById('vipClearBtn'),
+    audioUnlockBtn: document.getElementById('audioUnlockBtn'),
+    contactFab: document.getElementById('contactFab'),
+    contactOverlay: document.getElementById('contactOverlay'),
+    contactCloseBtn: document.getElementById('contactCloseBtn'),
+    contactInput: document.getElementById('contactInput'),
+    contactCount: document.getElementById('contactCount'),
+    contactSubmitBtn: document.getElementById('contactSubmitBtn'),
+    contactError: document.getElementById('contactError'),
     toast: document.getElementById('toast'),
   };
 
@@ -115,9 +123,14 @@
     currentView: 'loading',
     resumeInFlight: false,
     speechWord: '',
-    speechUtterance: null,
     lastSpeechTriggerAt: 0,
     speechNoticeShown: false,
+    // 是否已经通过用户手势成功发出过声音（微信内置 / UC 等需要这一步）
+    audioUnlocked: false,
+    contact: {
+      open: false,
+      busy: false,
+    },
     ping: {
       timer: null,
       inFlight: false,
@@ -240,6 +253,27 @@
     el.vipCloseBtn.addEventListener('click', closeVipModal);
     el.vipPayCloseBtn.addEventListener('click', closeVipModal);
     el.vipClearBtn.addEventListener('click', clearVipAndReload);
+
+    if (el.audioUnlockBtn) {
+      el.audioUnlockBtn.addEventListener('click', unlockAudioByGesture);
+    }
+    if (el.contactFab) {
+      el.contactFab.addEventListener('click', openContact);
+    }
+    if (el.contactCloseBtn) {
+      el.contactCloseBtn.addEventListener('click', closeContact);
+    }
+    if (el.contactOverlay) {
+      el.contactOverlay.addEventListener('click', (event) => {
+        if (event.target === el.contactOverlay) closeContact();
+      });
+    }
+    if (el.contactInput) {
+      el.contactInput.addEventListener('input', updateContactCount);
+    }
+    if (el.contactSubmitBtn) {
+      el.contactSubmitBtn.addEventListener('click', submitContact);
+    }
 
     // 首次交互时唤醒语音引擎（Chrome 在页面未交互时会挂起语音队列）。
     window.addEventListener('pointerdown', ensureSpeechReady, {
@@ -1205,105 +1239,137 @@
     startCountdown(question.deadline, question.serverNow);
   }
 
-  function isSpeechSupported() {
-    return Boolean(
-      window.speechSynthesis &&
-        typeof window.speechSynthesis.speak === 'function' &&
-        typeof window.SpeechSynthesisUtterance === 'function'
-    );
+  // ---------------------------------------------------------------
+  // 发音：本地 MP3（/audio/<word>.mp3）
+  // 已彻底废弃 speechSynthesis —— HTTP 环境下 secureContext=false，
+  // 多数手机浏览器直接禁用该 API，改用 <audio> 兼容性最好。
+  // ---------------------------------------------------------------
+  const AUDIO_BASE = '/audio/';
+  const AUDIO_CACHE_LIMIT = 60;
+  // 音频走 immutable 强缓存，换音源时必须改这个版本号，否则老设备一年内不会重新下载。
+  const AUDIO_VERSION = '2';
+
+  /** word -> HTMLAudioElement；同一个词反复播不必重复建对象。 */
+  const audioCache = new Map();
+  let activeAudio = null;
+
+  function isAudioSupported() {
+    return typeof window.Audio === 'function';
   }
 
-  function showSpeechUnsupported() {
+  function audioUrl(word) {
+    return AUDIO_BASE + encodeURIComponent(String(word).trim().toLowerCase()) + '.mp3?v=' + AUDIO_VERSION;
+  }
+
+  function trimAudioCache() {
+    while (audioCache.size > AUDIO_CACHE_LIMIT) {
+      const oldestKey = audioCache.keys().next().value;
+      if (oldestKey === undefined) return;
+      const node = audioCache.get(oldestKey);
+      if (node && node !== activeAudio) {
+        try {
+          node.pause();
+        } catch (error) {
+          /* 某些 WebView 会抛异常，忽略 */
+        }
+        node.removeAttribute('src');
+      }
+      audioCache.delete(oldestKey);
+    }
+  }
+
+  function getAudioElement(word) {
+    const key = String(word || '').trim().toLowerCase();
+    if (!key || !isAudioSupported()) return null;
+    const cached = audioCache.get(key);
+    if (cached) return cached;
+
+    const node = new Audio();
+    node.preload = 'auto';
+    node.src = audioUrl(key);
+    audioCache.set(key, node);
+    trimAudioCache();
+    return node;
+  }
+
+  /** 静默预加载：只开始下载，不播放。 */
+  function preloadWord(word) {
+    const node = getAudioElement(word);
+    if (!node) return;
+    try {
+      node.load();
+    } catch (error) {
+      /* ignore */
+    }
+  }
+
+  function preloadWords(words) {
+    if (!Array.isArray(words)) return;
+    for (const word of words) preloadWord(word);
+  }
+
+  function showAudioUnavailable() {
     if (state.speechNoticeShown) return;
     state.speechNoticeShown = true;
-    showToast(
-      '当前浏览器不支持发音，请尝试在外部 Safari/Chrome 中打开',
-      'error'
-    );
-  }
-
-  function pickSpeechVoice(voices) {
-    if (!Array.isArray(voices)) return null;
-    return (
-      voices.find((voice) => /^en[-_]US/i.test(voice.lang)) ||
-      voices.find((voice) => /^en/i.test(voice.lang)) ||
-      null
-    );
+    showToast('发音加载失败，请检查网络后重试', 'error');
   }
 
   function stopSpeech() {
-    if (window.speechSynthesis) {
-      try {
-        window.speechSynthesis.cancel();
-      } catch (error) {
-        // 忽略部分 WebView 的 cancel 异常。
-      }
+    if (!activeAudio) return;
+    try {
+      activeAudio.pause();
+      activeAudio.currentTime = 0;
+    } catch (error) {
+      /* 忽略部分 WebView 的异常 */
     }
-    state.speechUtterance = null;
+    activeAudio = null;
   }
 
   function handleSpeakTrigger() {
     if (!state.speechWord) return;
     const now = Date.now();
-    if (now - state.lastSpeechTriggerAt < 500) return;
+    if (now - state.lastSpeechTriggerAt < 300) return;
     state.lastSpeechTriggerAt = now;
-
-    if (!isSpeechSupported()) {
-      showSpeechUnsupported();
-      return;
-    }
-    // 直接在 click/touchend 的同步调用链里调用 speak()，手机浏览器才认可用户手势。
+    // 在 click/touchend 的同步调用链里 play()，手机浏览器才认可这是用户手势。
     playSpeech(state.speechWord);
   }
 
   function playSpeech(word, options = {}) {
     const silent = options.silent === true;
     if (!word) return false;
-    if (!isSpeechSupported()) {
+
+    const node = getAudioElement(word);
+    if (!node) {
       if (silent) nudgeSpeakButton();
-      else showSpeechUnsupported();
+      else showAudioUnavailable();
       return false;
     }
-    const synth = window.speechSynthesis;
-    const Utterance = window.SpeechSynthesisUtterance;
 
     try {
-      // 每次发声前先清空可能卡住的队列。
-      synth.cancel();
-      const utterance = new Utterance(word);
-      utterance.lang = 'en-US';
-      utterance.rate = 0.9;
-      utterance.pitch = 1;
-      utterance.volume = 1;
+      stopSpeech();
+      node.currentTime = 0;
+      node.volume = 1;
+      activeAudio = node;
 
-      const voice = pickSpeechVoice(synth.getVoices());
-      if (voice) utterance.voice = voice;
-
-      utterance.onend = () => {
-        if (state.speechUtterance === utterance) state.speechUtterance = null;
-      };
-      utterance.onerror = (event) => {
-        if (state.speechUtterance === utterance) state.speechUtterance = null;
-        if (
-          event &&
-          ['not-allowed', 'synthesis-unavailable', 'synthesis-failed', 'language-unavailable'].includes(
-            event.error
-          )
-        ) {
-          // 自动播放被浏览器拦截时不要弹错误提示，只提示用户点喇叭。
-          if (silent) nudgeSpeakButton();
-          else showSpeechUnsupported();
-        }
-      };
-
-      // 保持引用，避免部分浏览器在语音结束前回收 utterance。
-      state.speechUtterance = utterance;
-      synth.speak(utterance);
+      const played = node.play();
+      if (played && typeof played.then === 'function') {
+        played
+          .then(() => {
+            // 真正开始播放，说明当前环境已拿到播放权限。
+            markAudioUnlocked();
+          })
+          .catch(() => {
+            // 自动播放被策略拦截：静默失败，只抖动喇叭引导手动点击。
+            if (silent) nudgeSpeakButton();
+            else showAudioUnavailable();
+          });
+      } else {
+        markAudioUnlocked();
+      }
       return true;
     } catch (error) {
-      console.warn('语音播放失败', error);
       if (silent) nudgeSpeakButton();
-      else showSpeechUnsupported();
+      else showAudioUnavailable();
       return false;
     }
   }
@@ -1322,57 +1388,161 @@
     }
   }
 
+  /** 首次交互时预热当前词的音频（部分浏览器要求先有手势才肯缓冲）。 */
   function ensureSpeechReady() {
-    try {
-      const synth = window.speechSynthesis;
-      if (synth && synth.paused) synth.resume();
-    } catch (error) {
-      /* 某些 WebView 不支持 resume，忽略 */
-    }
+    if (state.speechWord) preloadWord(state.speechWord);
   }
 
-  /**
-   * 尝试自动播报（静默失败）。
-   * 语音列表在部分浏览器里是异步加载的，若暂时为空则等 voiceschanged /
-   * 700ms 后再试一次，避免第一次进页面听不到声音。
-   */
+  /** 尝试自动播报（静默失败，失败时抖动喇叭按钮）。 */
   function tryAutoSpeak(word) {
-    if (!word || !isSpeechSupported()) return false;
-    ensureSpeechReady();
-    const synth = window.speechSynthesis;
-    let voices = [];
-    try {
-      voices = synth.getVoices() || [];
-    } catch (error) {
-      voices = [];
-    }
-    if (voices.length > 0) return playSpeech(word, { silent: true });
-
-    let spoke = false;
-    const speakOnce = () => {
-      if (spoke) return;
-      spoke = true;
-      playSpeech(word, { silent: true });
-    };
-    try {
-      synth.addEventListener('voiceschanged', speakOnce, { once: true });
-    } catch (error) {
-      /* 老浏览器不支持 options，忽略 */
-    }
-    window.setTimeout(speakOnce, 700);
-    return true;
+    if (!word) return false;
+    return playSpeech(word, { silent: true });
   }
 
   /**
-   * 延迟一点点再播，确保题目已经渲染完；
+   * 题目到达后立刻预取音频，再延迟一点点播放，确保题干已渲染完；
    * isStillCurrent 用于防止用户已切题后还播上一题的单词。
    */
   function scheduleAutoSpeak(word, isStillCurrent) {
     if (!word) return;
+    preloadWord(word);
     window.setTimeout(() => {
       if (typeof isStillCurrent === 'function' && !isStillCurrent()) return;
       tryAutoSpeak(word);
-    }, 260);
+    }, 200);
+  }
+
+  // ---------------------------------------------------------------
+  // 声音唤醒引导
+  // 微信内置浏览器、UC 等会在「用户手势」之前彻底禁止发音，
+  // 自动播放必然失败。这里给一个显式按钮，让用户点一下换取播放权限。
+  // ---------------------------------------------------------------
+  function isGameplayView() {
+    return state.currentView === 'room' ||
+      state.currentView === 'game' ||
+      state.currentView === 'solo';
+  }
+
+  function updateAudioUnlockUi() {
+    if (!el.audioUnlockBtn) return;
+    const shouldShow = Boolean(el.audioUnlockBtn) &&
+      isAudioSupported() &&
+      !state.audioUnlocked &&
+      isGameplayView();
+    el.audioUnlockBtn.hidden = !shouldShow;
+  }
+
+  function markAudioUnlocked() {
+    if (state.audioUnlocked) return;
+    state.audioUnlocked = true;
+    updateAudioUnlockUi();
+  }
+
+  /**
+   * 必须在 click/touchend 的同步调用链里执行，浏览器才认可用户手势。
+   * 这里播一个 0.5 秒静音 MP3：不吵，但足以打开移动端的播放通道。
+   */
+  function unlockAudioByGesture() {
+    if (!isAudioSupported()) {
+      showAudioUnavailable();
+      return;
+    }
+
+    const node = new Audio(AUDIO_BASE + '_silent.mp3?v=' + AUDIO_VERSION);
+    node.preload = 'auto';
+    activeAudio = node;
+
+    const played = node.play();
+    if (played && typeof played.then === 'function') {
+      played
+        .then(() => {
+          markAudioUnlocked();
+          showToast('声音已就绪', 'success');
+          if (state.speechWord) playSpeech(state.speechWord, { silent: true });
+        })
+        .catch(() => {
+          showToast('还没拿到播放权限，请再点一次「唤醒声音」', 'error');
+        });
+    } else {
+      markAudioUnlocked();
+      showToast('声音已就绪', 'success');
+    }
+  }
+
+  // ---------------------------------------------------------------
+  // 联系站长：留言（按 device_token 限制每台设备 20 条）
+  // ---------------------------------------------------------------
+  function updateContactFab() {
+    if (!el.contactFab) return;
+    el.contactFab.hidden = state.currentView !== 'home';
+  }
+
+  function showContactError(message) {
+    if (!el.contactError) return;
+    el.contactError.textContent = message || '';
+    el.contactError.hidden = !message;
+  }
+
+  function updateContactCount() {
+    if (!el.contactCount || !el.contactInput) return;
+    const length = Array.from(el.contactInput.value).length;
+    el.contactCount.textContent = `${length} / 50`;
+  }
+
+  function openContact() {
+    if (!el.contactOverlay) return;
+    state.contact.open = true;
+    el.contactOverlay.hidden = false;
+    showContactError('');
+    el.contactInput.value = '';
+    updateContactCount();
+    document.body.classList.add('vip-open');
+    window.setTimeout(() => {
+      if (!el.contactOverlay.hidden) el.contactInput.focus();
+    }, 60);
+  }
+
+  function closeContact() {
+    if (!el.contactOverlay) return;
+    state.contact.open = false;
+    el.contactOverlay.hidden = true;
+    document.body.classList.remove('vip-open');
+  }
+
+  async function submitContact() {
+    if (state.contact.busy) return;
+    const content = el.contactInput.value.trim();
+
+    if (!content) {
+      showContactError('请先写下你遇到的问题');
+      el.contactInput.focus();
+      return;
+    }
+    if (Array.from(content).length > 50) {
+      showContactError('留言最多 50 字，请精简一下');
+      return;
+    }
+
+    showContactError('');
+    state.contact.busy = true;
+    setBusy(el.contactSubmitBtn, true, '发送中…');
+
+    const result = await request(
+      'message:create',
+      { content, deviceToken: deviceToken() },
+      8000
+    );
+
+    state.contact.busy = false;
+    setBusy(el.contactSubmitBtn, false);
+
+    if (!result.ok) {
+      showContactError(result.error || '发送失败，请稍后重试');
+      return;
+    }
+
+    closeContact();
+    showToast('已发送给站长，谢谢反馈！', 'success');
   }
 
   function renderAnswerReveal(node, word, meanings) {
@@ -1442,9 +1612,8 @@
       'aria-label',
       isListen ? '播放题目单词发音' : '播放题干单词发音'
     );
-    if (state.speechWord && !isSpeechSupported()) {
-      showSpeechUnsupported();
-    }
+    // 题目一到手就先把音频拉下来，等自动播放触发时基本已在本地。
+    if (state.speechWord) preloadWord(state.speechWord);
   }
 
   function renderQuestion(question) {
@@ -2411,7 +2580,7 @@
       : question.prompt || question.word || '';
     state.speechWord = isListen || question.type === 'en2zh' ? question.word : '';
     el.soloSpeakBtn.hidden = !state.speechWord;
-    if (state.speechWord && !isSpeechSupported()) showSpeechUnsupported();
+    if (state.speechWord) preloadWord(state.speechWord);
 
     el.soloOptions.replaceChildren();
     question.options.forEach((text, index) => {
@@ -2793,6 +2962,8 @@
     }
     document.body.dataset.view = name;
     window.scrollTo(0, 0);
+    updateAudioUnlockUi();
+    updateContactFab();
   }
 
   function goHome({ clearSession: shouldClear, message } = {}) {

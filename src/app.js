@@ -9,6 +9,7 @@ const { Server } = require('socket.io');
 const { loadWords, buildQuestions, buildQuestion } = require('./wordBank');
 const { createVipStore } = require('./vipCodes');
 const { createAdminAuth } = require('./adminAuth');
+const { createMessageStore, MAX_CONTENT } = require('./messages');
 const { APP_VERSION } = require('./version');
 
 const DEFAULT_CONFIG = {
@@ -19,7 +20,8 @@ const DEFAULT_CONFIG = {
   raceAdvanceDelayMs: 250,
   roomTtlMs: 30 * 60 * 1000,
   // 双方都离线后，未结束的对局保留多久用于「刷新重连」；结束后立即回收。
-  emptyRoomGraceMs: 10 * 1000,
+  // 60 秒：移动端切后台会被系统挂起、弱网重连也更慢，10 秒太容易误杀。
+  emptyRoomGraceMs: 60 * 1000,
   // 创建房间需要先通过激活码验证（单人错词挑战不受限制）。
   vipRequired: true,
   cleanupIntervalMs: 60 * 1000,
@@ -37,6 +39,7 @@ function createArenaServer(options = {}) {
   const wordById = new Map(words.map((entry) => [entry.id, entry]));
   const wordByName = new Map(words.map((entry) => [entry.word.toLowerCase(), entry]));
   const vip = options.vip || createVipStore(options.vipOptions);
+  const messages = options.messages || createMessageStore(options.messageOptions);
   const app = express();
   const httpServer = http.createServer(app);
   const io = new Server(httpServer, {
@@ -212,6 +215,7 @@ function createArenaServer(options = {}) {
         rooms: rooms.size,
         players: [...rooms.values()].reduce((sum, room) => sum + room.players.length, 0),
       },
+      messages: messages.stats(),
     });
   });
 
@@ -252,6 +256,50 @@ function createArenaServer(options = {}) {
       stats: vip.stats(),
     });
   });
+
+  // ---- 留言管理（站长后台）----
+
+  app.get('/api/admin/messages', requireAdmin, (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({ ok: true, messages: messages.list(), stats: messages.stats() });
+  });
+
+  app.post('/api/admin/messages/handle', requireAdmin, (req, res) => {
+    const body = req.body || {};
+    const result = messages.markHandled(body.id, body.handled !== false);
+    audit('admin_message_handle', { ip: httpIp(req), id: String(body.id || ''), ok: result.ok });
+    if (!result.ok) {
+      res.status(400).json(result);
+      return;
+    }
+    res.json({ ok: true, message: result.message, record: result.record, stats: messages.stats() });
+  });
+
+  app.post('/api/admin/messages/delete', requireAdmin, (req, res) => {
+    const body = req.body || {};
+    const result = messages.remove(body.id);
+    audit('admin_message_delete', { ip: httpIp(req), id: String(body.id || ''), ok: result.ok });
+    if (!result.ok) {
+      res.status(400).json(result);
+      return;
+    }
+    res.json({ ok: true, message: result.message, stats: messages.stats() });
+  });
+
+  // 单词发音音频：按单词命名、内容不变，给一年强缓存 + immutable，
+  // 手机下过一次后不再回源（服务器带宽只有 4M，这一层很关键）。
+  app.use(
+    '/audio',
+    express.static(path.join(publicDir, 'audio'), {
+      index: false,
+      maxAge: '365d',
+      immutable: true,
+      etag: true,
+      setHeaders: (res) => {
+        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+      },
+    })
+  );
 
   app.use(
     express.static(publicDir, {
@@ -439,7 +487,20 @@ function createArenaServer(options = {}) {
     for (const player of room.players) {
       sessions.delete(player.sessionId);
     }
+
+    // 彻底清理，避免留下「幽灵连接」：
+    // 1) 先通知在线客户端；2) 清掉 socketPlayers / socket.data 映射；3) 把 socket 移出房间。
     io.to(room.code).emit('room:closed', { reason: '房间已关闭' });
+
+    for (const [socketId, reference] of socketPlayers) {
+      if (reference.roomCode === room.code) {
+        socketPlayers.delete(socketId);
+        const socket = io.sockets.sockets.get(socketId);
+        if (socket && socket.data.roomCode === room.code) socket.data.roomCode = null;
+      }
+    }
+    io.socketsLeave(room.code);
+
     rooms.delete(room.code);
     audit('room_closed', {
       room: room.code,
@@ -1088,6 +1149,24 @@ function createArenaServer(options = {}) {
       }
       socket.data.vip = true;
       ack({ ok: true, kind: result.kind, message: result.message });
+    });
+
+    // 联系站长：公开留言入口（按 device_token 限流，不需要激活码）
+    on('message:create', (payload, ack) => {
+      const ip = clientIp(socket);
+      const content = payload && payload.content;
+      const deviceToken = payload && payload.deviceToken;
+      const result = messages.add({ content, deviceToken, ip });
+
+      audit('message_create', {
+        ip,
+        device: deviceToken ? String(deviceToken).slice(0, 8) : null,
+        length: typeof content === 'string' ? Array.from(content).length : 0,
+        ok: result.ok,
+        reason: result.code || null,
+      });
+
+      ack(result);
     });
 
     on('room:create', (payload, ack) => {
@@ -1790,7 +1869,7 @@ function createArenaServer(options = {}) {
     });
   }
 
-  return { app, httpServer, io, rooms, sessions, config, adminAuth, vip, close };
+  return { app, httpServer, io, rooms, sessions, config, adminAuth, vip, messages, close };
 }
 
 module.exports = { createArenaServer, DEFAULT_CONFIG, SESSION_MISSING };
