@@ -574,6 +574,11 @@ cet-arena/
   - 首页 `Cache-Control: no-cache`，保证更新后能拿到新 HTML；
   - CSS/JS 静态资源缓存 7 天，HTML 通过 `?v=...` 版本号更新；
   - 修改 `public/app.js` 或 `styles.css` 后，请同时修改 `index.html` 里的 `?v=` 版本号，并递增 `src/version.js` 中的 `APP_VERSION`。
+- **版本号与缓存规约（长期规则，务必遵守）**：
+  - **index 前端**（`public/index.html`、`public/app.js`、`public/wrongbook.js`、`public/styles.css`）：改动其中任何一个，必须同时改 **三处** `index.html` 的 `?v=`（styles.css / wrongbook.js / app.js）和 **两处** `APP_VERSION`（`src/version.js`、`public/app.js`），三者保持一致；`test/dom-contract.test.js` 会强制校验，不一致直接测试失败。`APP_VERSION` 同时是 Socket.IO 握手版本——递增会让旧页面连不上新后端并提示刷新，这是特性不是 bug。
+  - **admin 前端**（`public/admin.html`、`public/admin.js`、`public/admin.css`）：`/admin`、`/admin.js`、`/admin.css` 一律 `Cache-Control: no-store, no-cache, must-revalidate`，**不需要**递增 `APP_VERSION`（它不影响握手）；但每次改 `admin.js` / `admin.css`，必须把 `admin.html` 里对应的 `?v=` 换成**新值**（建议与当前 `APP_VERSION` 同步，如 `?v=20261113-vip18`），用于个别仍按 URL 缓存的手机浏览器/代理。
+  - 只改文档、只改后端（`src/` 下非 `version.js`）、只改 `data/*`：**不需要**动任何版本号。
+  - 排查"手机上还是旧界面"的顺序：① 看 `index.html`/`admin.html` 里的 `?v=` 是否已变；② 让用户完全关掉标签页重开（bfcache 会绕过 `no-store`）；③ 最后才怀疑服务端没重启。
 - **Ping 显示**：
   - 客户端每秒通过自定义 `latency:ping` 事件做一次 Socket.IO 往返测速；
   - 顶部显示 `PING xx ms`；

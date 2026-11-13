@@ -7,6 +7,7 @@
 > 强制格式（最新在最上）：`[YYYY-MM-DD HH:mm] 版本号 | 核心改动 | 遗留问题`
 > 每次任务结束**必须**在此节点顶部新增一行，无需用户提醒。
 
+- [2026-11-13 17:05] `20261112-vip17`（已上线） | 收尾：把「前端缓存与版本号规约」写进 README（index 用 `APP_VERSION` + 三处 `?v=`；admin 用 `admin.html` 的 `?v=` + 服务端 no-store，不递增 APP_VERSION）；补全「未验证清单」；核对本轮版本 `vip16 → vip17` 已递增、`admin.html` 资源版本号 `vip14 → vip17` 已对齐；工作区干净，4 个 data 运行时文件均被 gitignore | 无
 - [2026-11-13 13:50] `20261112-vip17`（待部署） | 修复后台「拉黑 N 台」不显示：`statusOf()` 原先把拉黑数拼在 `revoked` 分支内，`allow-rebind` 把状态改回 `available` 后提示就消失；改为**任何状态**只要 `revokedDeviceCount > 0` 都渲染「· 拉黑 N 台」；新增 `test/admin-ui.test.js`（假 DOM 真跑 `admin.js`：available/used/revoked 三态 + 0 台不显示 + 按钮渲染），已验证「删掉修复该用例立即失败」；测试链 13 → 14 套全绿；`APP_VERSION → vip17` | 待部署
 - [2026-11-12 22:45] `20261112-vip16`（待部署） | **解绑重构为封禁机制（补齐换 token 绕过漏洞）**：`reset` 后该码对**所有设备**返回 `REVOKED`（清缓存/换浏览器也无效）；新增 `POST /api/admin/codes/allow-rebind`（封禁→未使用，保留 `revokedDevices` 永久拉黑原设备）；新增 `POST /api/admin/codes/delete`（彻底删除运行时新增的码，种子码 `SEED_PROTECTED`）；踢线修复：设备指纹改在 **Socket.IO 握手 `auth.deviceToken`** + `vip:verify`/`vip:status` 入口统一记录（验证失败也记录）；`describe()` 增加 `revokedDeviceCount`/`deletable`，`stats()` 增 `revoked` 且封禁码不计入可用；后台按状态显示「解绑/封禁」「允许换机」「彻底删除」；`APP_VERSION → vip16`；13 套全绿（vip 80 / admin 96） | 待部署
 - [2026-11-12 22:40] `20261112-vip15`（待部署） | **修复解绑后原设备自动复活（白嫖漏洞）**：根因是 `reset()` 删除 state 记录 → 原设备刷新静默重验命中「首次使用」→ 自动重新绑定。改为 **revoked 语义**（保留记录 + `revokedDevices` 永久拉黑原设备，新设备仍可换机激活）；`verify()` 增加 `silent` 模式（刷新/重连重验**绝不允许首次绑定**）；新增 `vip:status` 按 deviceToken 做权威授权判定；`vip:verify` 记录 `socket.data.deviceToken`，后台解绑时向该设备所有在线连接推送 `vip:revoked`（只清 `socket.data.vip`，不断线、不打断对局）；后台确认文案同步；`APP_VERSION → vip15`；新增 20+ 断言（vip 65 / admin 79），13 套全绿 | 待部署
@@ -86,6 +87,26 @@
 - 后续可选：留言按「已处理/待处理」分页、卡密按批次打标签、导出 CSV。
 - 重做音频：`PYTHONPATH=<.tools/pylibs-tts> python scripts/build_audio_edge.py --skip-existing`（需全权限 + 联网），换音源记得递增 `AUDIO_VERSION`。
 
+## 未验证清单（截至 2026-11-13 17:05）
+
+**已真机验证（老板确认过）**：
+
+- 错词本 VIP 拦截、限时闯关（倒计时 / 超时判错 / 第 4 关占位）。
+- 首页公告横幅、正文、时间显示。
+- 后台：解绑 / 封禁、允许换机、vip17 三种状态均显示「拉黑 N 台」。
+- 封禁后原设备 A 手动重输同一张码被拒（`REVOKED`），换设备也绑不上。
+
+**仅代码 + 自动化测试通过、尚未收到手机真机点击确认**：
+
+- 「彻底删除」按钮（含删除时踢线、删除后无法再激活、种子码删除被拒）——`admin.test.js` 96 项覆盖。
+- 在线踢线的前端表现：服务端日志有 `vip_revoked kicked=1`，但手机上没有确认过红色 toast 与自动降级。
+- 自定义卡密生成 UI（vip14 修复后）及「生成后立即激活」。
+- 购买页「有效期：1年」与「⭐ 增值服务：专属定制卡密 +9.9元」文案。
+- 首页 Footer「关于我们」弹窗。
+- 公告时间改为只显示 `YYYY-MM-DD` 的最终效果。
+
+> 这些项都不影响当前线上可用性，属于「下次真机顺手点一下」的清单。
+
 ## 环境坑位
 
 - 本地 3000 端口易被旧进程占用，需强杀（`netstat -ano | findstr :3000` → `taskkill /PID xxx /F`）。
@@ -95,7 +116,7 @@
 - **`public/audio/` 要入库**（2869 个文件 / **26.38MB**），提交和 `git pull` 都会明显变慢，属正常。
 - **设备 Token 存在浏览器 `localStorage` 的 `cetArena.deviceToken.v1`**：清空浏览器数据、换无痕窗口、换浏览器都会生成新 Token，导致已绑定的码失效（需后台解绑），留言的 20 条额度也会重置。排查时可在 DevTools → Application → Local Storage 里看这个键的值，与后台「绑定设备」列的前 8 位比对。
 - 线上部署走 Deploy Key + `ssh.github.com:443`：`cd /opt/cet-arena && git pull && pm2 restart cet-arena`。
-- 改动前端资源后必须升 `APP_VERSION`，否则浏览器会用 7 天缓存里的旧脚本（`dom-contract.test.js` 会校验 `?v=` 与版本号一致）。
+- **版本号规约**：改 `index/app/wrongbook/styles` 必须升 `APP_VERSION` + `index.html` 三处 `?v=`；改 `admin.js/admin.css` **不用**升 `APP_VERSION`，但要改 `admin.html` 里对应 `?v=`。详见 README §7.1「版本号与缓存规约」。
 - `git` 不在系统 PATH 里，直接敲 `git` 会报「无法识别」。需用工作区自带的 portable git：
   ```powershell
   cd C:\Users\Yuan\Documents\deepseek-harness\default-workspace\cet-arena
