@@ -7,6 +7,7 @@
 > 强制格式（最新在最上）：`[YYYY-MM-DD HH:mm] 版本号 | 核心改动 | 遗留问题`
 > 每次任务结束**必须**在此节点顶部新增一行，无需用户提醒。
 
+- [2026-11-13 17:13] `20261112-vip17`（版本不变·纯文档） | 文档对齐：HANDOFF 正文三节（当前进度 / 线上版本 / 待办事项）改到 vip17 实测现状、与顶部时间轴消除矛盾，补 vip15–vip17 安全闭环摘要与 PM2/卡密实测值；README 修 4 处过期条目（§3 测试套数改 14 套且 `admin-ui` 不重复计数、§7 发音改本地 MP3、声音唤醒清单不再依赖 TTS 能力检测、§9 音频重跑脚本改 `build_audio_edge.py`）；未动代码、未改 `APP_VERSION`/`?v=`、未重启 | 无
 - [2026-11-13 17:05] `20261112-vip17`（已上线） | 收尾：把「前端缓存与版本号规约」写进 README（index 用 `APP_VERSION` + 三处 `?v=`；admin 用 `admin.html` 的 `?v=` + 服务端 no-store，不递增 APP_VERSION）；补全「未验证清单」；核对本轮版本 `vip16 → vip17` 已递增、`admin.html` 资源版本号 `vip14 → vip17` 已对齐；工作区干净，4 个 data 运行时文件均被 gitignore | 无
 - [2026-11-13 13:50] `20261112-vip17`（待部署） | 修复后台「拉黑 N 台」不显示：`statusOf()` 原先把拉黑数拼在 `revoked` 分支内，`allow-rebind` 把状态改回 `available` 后提示就消失；改为**任何状态**只要 `revokedDeviceCount > 0` 都渲染「· 拉黑 N 台」；新增 `test/admin-ui.test.js`（假 DOM 真跑 `admin.js`：available/used/revoked 三态 + 0 台不显示 + 按钮渲染），已验证「删掉修复该用例立即失败」；测试链 13 → 14 套全绿；`APP_VERSION → vip17` | 待部署
 - [2026-11-12 22:45] `20261112-vip16`（待部署） | **解绑重构为封禁机制（补齐换 token 绕过漏洞）**：`reset` 后该码对**所有设备**返回 `REVOKED`（清缓存/换浏览器也无效）；新增 `POST /api/admin/codes/allow-rebind`（封禁→未使用，保留 `revokedDevices` 永久拉黑原设备）；新增 `POST /api/admin/codes/delete`（彻底删除运行时新增的码，种子码 `SEED_PROTECTED`）；踢线修复：设备指纹改在 **Socket.IO 握手 `auth.deviceToken`** + `vip:verify`/`vip:status` 入口统一记录（验证失败也记录）；`describe()` 增加 `revokedDeviceCount`/`deletable`，`stats()` 增 `revoked` 且封禁码不计入可用；后台按状态显示「解绑/封禁」「允许换机」「彻底删除」；`APP_VERSION → vip16`；13 套全绿（vip 80 / admin 96） | 待部署
@@ -41,6 +42,11 @@
 
 ## 当前进度
 
+- **【当前线上状态】`20261112-vip17` 已上线（2026-11-13 13:47 部署，PM2 在线、restarts 25；17:05 完成文档收尾）**：本轮 vip15 → vip17 三版全部是**激活码安全闭环**，没有新功能。
+  - **vip15 · 堵「解绑后原设备自动复活」白嫖漏洞**：根因是 `reset()` 删掉 state 记录 → 原设备刷新时静默重验命中「首次使用」→ 自动重新绑定。改为 **revoked 语义**（保留记录 + `revokedDevices` 永久拉黑原设备，新设备仍可换机激活）；`verify()` 增加 `silent` 模式（刷新/重连**绝不允许首次绑定**）；新增 `vip:status` 按 deviceToken 做权威授权判定；后台解绑时向该设备所有在线连接推送 `vip:revoked`（只清 `socket.data.vip`，不断线、不打断当前对局）。
+  - **vip16 · 补齐「换 token 绕过」漏洞**：封禁后该码对**所有设备**返回 `REVOKED`（清缓存/换浏览器也无效）；新增 `POST /api/admin/codes/allow-rebind`（封禁 → 未使用，保留 `revokedDevices` 黑名单）与 `POST /api/admin/codes/delete`（只删运行时新增码，种子码返回 `SEED_PROTECTED`）；设备指纹前移到 Socket.IO 握手 `auth.deviceToken`，保证被拉黑的在线设备也能被精准踢线。
+  - **vip17 · 修后台「拉黑 N 台」不显示**：`statusOf()` 原先把拉黑数拼在 `revoked` 分支内，`allow-rebind` 把状态改回 `available` 后提示就消失；改为**任何状态**只要 `revokedDeviceCount > 0` 都渲染；新增 `test/admin-ui.test.js`（available/used/revoked 三态 + 0 台不显示 + 按钮渲染），已验证「删掉修复该用例立即失败」。
+  - 测试链 **13 → 14 套全绿**；`APP_VERSION vip16 → vip17`，`admin.html` 资源版本号 `vip14 → vip17` 已对齐；本地与服务器工作区均干净。
 - **【音质升级】发音改为微软神经网络语音（版本 `20261112-vip8`，已于 2026-11-12 15:55 随 vip8 上线）**：
   - 老板反馈旧版（Windows SAPI 8kHz/24kbps）"发闷像老式电话"。已换 `edge-tts` + **`en-US-JennyNeural`** 音色。
   - 参数：**24kHz / 48kbps / 单声道 MP3**，平均 **9.4KB**，全量 **26.38MB**（2868 词 + 1 静音，零失败）。
@@ -53,7 +59,7 @@
   - 前端：`new Audio('/audio/<word>.mp3?v=2')` 播放，元素缓存上限 60；题目到达即 `preload`，200ms 后播放；唤醒按钮改为播放 `_silent.mp3`（0.5 秒静音），不再依赖任何 TTS 能力检测。
   - **整局预取不可行**：中译英/听音选词的单词就是答案，提前下发等于泄题，只能题目到达后再取。
   - `public/debug-panel.js` 与 `window.__cetDebug` 已彻底删除。
-  - 测试：`solo-ui` 的假 TTS 已改为假 `Audio` 并断言播放地址；全量 **11 套** 通过；无头 Chrome 实测"进房间→按钮出现→点击解锁→单词播放成功→控制台 0 报错"。
+  - 测试：`solo-ui` 的假 TTS 已改为假 `Audio` 并断言播放地址；**当时**全量 11 套通过（现为 14 套）；无头 Chrome 实测"进房间→按钮出现→点击解锁→单词播放成功→控制台 0 报错"。
 - **【新功能 1】声音唤醒引导（已随 vip8 于 2026-11-12 15:55 上线）**：准备页/对局页顶部显示「🔊 点击唤醒声音」，点击后在同步手势里播放 0.5 秒静音 MP3；`play()` resolve 即解锁并隐藏按钮，reject 则保留按钮提示重试。
 - **【新功能 2】联系站长留言板（vip9 起为动态配额）**：首页右下角悬浮按钮 → 弹窗输入（原生 `maxlength=50` + 实时字数）→ socket `message:create`。服务端按 `device_token` 的 SHA-256 **实时统计「未处理」条数**，同一设备**同时最多 5 条未处理**留言；站长标记已处理或删除后额度自动归还。另加 5 秒冷却防连点，落 `data/messages.json`（已 gitignore）。后台「留言管理」标签页（带待处理红点），按时间倒序，可标记已处理 / 恢复 / 删除。
 - **【重要机制变更】卡密绑定主体从「IP」改为「设备 Token」**（已上线，版本 `20261112-vip5`）：
@@ -61,28 +67,31 @@
   - 现在：前端首次打开页面即在 `localStorage` 的 `cetArena.deviceToken.v1` 生成 32 位随机 Token（`crypto.randomUUID()` 优先），每次 `vip:verify` 一并上传；后端把它作为唯一绑定主体，Token 不一致直接拒绝「该卡密已绑定其他设备」。
   - 同一台设备换网络（宿舍 Wi-Fi ↔ 手机热点）**放行**；换设备（哪怕还在同一个校园网、同一个 IP）**拦截**。
   - IP 降为风控参考：记录 `boundIp`（首次）与 `lastIp`（最近），不参与放行判断。
-  - 老数据（只有 `boundIp`）可在同 IP 首次带 Token 时平滑迁移；线上当前无已绑定卡，无迁移包袱。
-- 站长专属后台已上线：<http://1.15.152.160:3000/admin>，分「卡密管理」「留言管理」两个标签页。
+  - 老数据（只有 `boundIp`）可在同 IP 首次带 Token 时平滑迁移；线上当前**没有在用绑定**（`vip_codes.state.json` 仅 2 条已被封禁的历史记录），无迁移包袱。
+- 站长专属后台已上线：<http://1.15.152.160:3000/admin>，分「卡密管理」「留言管理」「公告管理」三个标签页（公告管理为 vip12 新增，带待处理红点的只有留言页）。
 - 线上站长密码**由 PM2 环境变量 `ADMIN_PASSWORD` 提供**（不是代码里的默认值），已执行 `pm2 save` 持久化。密码明文**不写入仓库**。
 - VIP 仿真付费墙已上线：**孤狼独行 ￥19.9（1 码）/ 双人成行 ￥29.9（2 码）/ 宿舍开黑 ￥59.9（6 码）**，点任一购买按钮只提示「支付通道维护中，请联系站长获取激活码」，不接真实支付、无收款码。
 - 激活码为**单一类型**：一码绑定一台设备、同设备可复用、并发加锁；`[已废弃-见环境变量]` 为站长码，不限次、不绑设备。验证通过后既能建房也能加入，未验证两者全拦截，房主房间没有免码席位。
-- 线上运行 `20261112-vip9`（设备 Token 版 + 高清神经网络音频 + 声音唤醒 + 留言板动态配额 + 清房防误杀）；**vip8 的高清音频、声音唤醒、留言板与清房防误杀改造均已随 vip8（`471e4bd`）与 vip9（`4ad475f`）部署上线**；本地已到 `20261112-vip10`（未部署）。
+- 线上运行 `20261112-vip17`（设备 Token 版 + 高清神经网络音频 + 声音唤醒 + 留言板动态配额 + 清房防误杀 + **封禁 / 允许换机 / 彻底删除** 的完整卡密生命周期）；vip8 音质升级（`471e4bd`）、vip9 留言动态配额（`4ad475f`）、vip11 限时闯关与专属码环境变量化、vip12–vip17 的首页公告 / 自定义卡密 / 封禁机制均已上线；**本地与线上版本号一致，无未部署改动**。
 
 ## 线上版本
 
-- 服务器提交：功能提交 `4ad475f feat: 留言板改为动态配额（同时最多 5 条未处理）（vip9）`，随后文档提交 `984c050 docs: 记录 vip9 上线与配额验收结果` 为分支 HEAD
-- 前端版本号：本地 `20261112-vip11` / 线上 `20261112-vip11`（已同步）
+- 服务版本：`20261112-vip17`，`GET /healthz` 实测 `{"ok":true,"rooms":0,"players":0,"words":2868,"version":"20261112-vip17"}`；PM2 进程 online、restarts 25、uptime 约 3 小时（2026-11-13 13:47 重启）
+- 服务器代码提交：`7ba9cbe chore: 对齐后台静态资源版本号到 vip17`（vip17 功能修复 `137cc5d` 在其前一分钟提交）
+- 服务器 HEAD：与本地一致（本轮 `docs:` 提交 `git pull` 后同为最新；**只改 README/HANDOFF 的文档提交不需要 `pm2 restart`**，Express 静态资源与文档都从磁盘读取，不进进程内存）
+- 前端版本号：本地 `20261112-vip17` / 线上 `20261112-vip17`（已同步）；`index.html` 三处 `?v=`、`admin.html` 两处 `?v=` 均为 `20261112-vip17`
 - 地址：<http://1.15.152.160:3000>　后台：<http://1.15.152.160:3000/admin>
 - 音频：`public/audio/` 2869 个文件（26.38MB），`/audio/<word>.mp3?v=2` 走 immutable 强缓存
-- 留言：`data/messages.json`，当前 0 条（验收数据已清理）
-- 卡密状态：`/opt/cet-arena/data/vip_codes.state.json` 不存在（全新，11 张卡 → 9 可用 / 0 已绑定）
-- 进程环境：`ADMIN_PASSWORD` 已注入并 `pm2 save` 持久化（可用 `pm2 pid cet-arena` + `tr '\0' '\n' < /proc/<pid>/environ | grep ADMIN` 复核）
+- 留言：`data/messages.json`，验收数据已清理；最新状态以 `/admin` →「留言管理」为准
+- 卡密状态：种子 `data/vip_codes.json` 9 条 `once` + 环境变量 `VIP_UNLIMITED_CODES` 注入 2 条 `unlimited`；`data/vip_codes.state.json` 现存 **2 条历史绑定记录，均处于封禁态**（`revoked` + `revokedDevices` + `rebindAllowedAt`，来自 11-12 / 11-13 的封禁验收），当前没有在用绑定；运行时自定义码落 `data/vip_codes.custom.json`
+- 进程环境：`ADMIN_PASSWORD` 与 `VIP_UNLIMITED_CODES` 均已注入并由 `pm2 save` 持久化（复核：`PID=$(pm2 pid cet-arena)` 后 `tr '\0' '\n' < /proc/$PID/environ | grep -E '^(ADMIN_PASSWORD|VIP_UNLIMITED_CODES)='`，只输出键名、不输出值）
 
 ## 待办事项
 
-- 线上已全量同步 vip9，暂无阻塞项；今晚收工。
-- 观察项：新 `emptyRoomGraceMs` = 60 秒是否够用（原 10 秒易误杀），若仍有玩家反馈对局中掉线后回不来可再放宽。
-- 安全加固建议：生产环境若缺少 `ADMIN_PASSWORD` 应拒绝启动或强制报错，避免静默回落到代码里的默认占位密码。
+- 线上已全量同步 vip17，暂无阻塞项；vip15–vip17 的卡密安全闭环已完成并上线。
+- 真机待点 6 项见下方「未验证清单」，均不影响线上可用性，属「下次用手机顺手点一下」的范围。
+- 观察项：`emptyRoomGraceMs` = 60 秒是否够用（原 10 秒易误杀），若仍有玩家反馈对局中掉线后回不来可再放宽。
+- **安全硬伤（已排期，下一轮单独做）**：生产环境若缺少 `ADMIN_PASSWORD` 应拒绝启动或强制报错，避免静默回落到代码里的默认占位密码。老板已明确本轮只改文档、不动代码，此条等指令再做。
 - 轮换密码方式：`ADMIN_PASSWORD='新密码' pm2 restart cet-arena --update-env && pm2 save`（变量名固定，值只存在于服务器）。
 - 后续可选：留言按「已处理/待处理」分页、卡密按批次打标签、导出 CSV。
 - 重做音频：`PYTHONPATH=<.tools/pylibs-tts> python scripts/build_audio_edge.py --skip-existing`（需全权限 + 联网），换音源记得递增 `AUDIO_VERSION`。
