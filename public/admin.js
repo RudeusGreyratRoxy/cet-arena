@@ -178,16 +178,17 @@
 
   function statusOf(item) {
     if (item.kind === 'unlimited') return { text: '永久可用', cls: 'free', used: false };
-    if (item.status === 'used') return { text: '已绑定', cls: 'used', used: true };
-    if (item.status === 'revoked') {
-      const count = Number(item.revokedDeviceCount) || 0;
-      return {
-        text: count > 0 ? `已封禁 · 拉黑 ${count} 台` : '已封禁',
-        cls: 'used',
-        used: false,
-      };
+    // 「拉黑 N 台」与状态无关：只要 revokedDeviceCount > 0 就必须展示，
+    // 否则「允许换机」把状态改回 available 后，站长就看不到历史拉黑记录了。
+    const revokedCount = Number(item.revokedDeviceCount) || 0;
+    const suffix = revokedCount > 0 ? ` · 拉黑 ${revokedCount} 台` : '';
+    if (item.status === 'used') {
+      return { text: `已绑定${suffix}`, cls: 'used', used: true };
     }
-    return { text: '未使用', cls: 'free', used: false };
+    if (item.status === 'revoked') {
+      return { text: `已封禁${suffix}`, cls: 'used', used: false };
+    }
+    return { text: `未使用${suffix}`, cls: 'free', used: false };
   }
 
   function sortCodes(list) {

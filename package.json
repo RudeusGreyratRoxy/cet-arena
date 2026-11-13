@@ -7,7 +7,7 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
-    "test": "node test/wrongbook.test.js && node test/dom-contract.test.js && node test/solo-ui.test.js && node test/solo.test.js && node test/trial.test.js && node test/room-lifecycle.test.js && node test/e2e.test.js && node test/race.test.js && node test/mixed.test.js && node test/vip.test.js && node test/admin.test.js && node test/messages.test.js && node test/announcement.test.js",
+    "test": "node test/wrongbook.test.js && node test/dom-contract.test.js && node test/solo-ui.test.js && node test/solo.test.js && node test/trial.test.js && node test/room-lifecycle.test.js && node test/e2e.test.js && node test/race.test.js && node test/mixed.test.js && node test/vip.test.js && node test/admin.test.js && node test/admin-ui.test.js && node test/messages.test.js && node test/announcement.test.js",
     "test:remote": "node test/remote-smoke.js"
   },
   "engines": {

@@ -9,7 +9,7 @@
     device: 'cetArena.deviceToken.v1',
     announcement: 'cetArena.announcementSeen.v1',
   };
-  const APP_VERSION = '20261112-vip16';
+  const APP_VERSION = '20261112-vip17';
 
   const VIEW_IDS = ['loading', 'home', 'room', 'game', 'result', 'solo', 'levels', 'trial'];
 

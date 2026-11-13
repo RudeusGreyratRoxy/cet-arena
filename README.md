@@ -187,7 +187,7 @@ $env:CI="true"
 npm test
 ```
 
-该命令会运行十三套测试：
+该命令会运行十四套测试：
 
 - `test/wrongbook.test.js`：错词本纯逻辑（入库、去重、连对、清零、掌握移除、脏数据容错）。
 - `test/dom-contract.test.js`：`app.js` 引用的 DOM id 全部存在、脚本加载顺序正确。
@@ -197,8 +197,9 @@ npm test
 - `test/e2e.test.js`：抢答模式完整 10 题、模式切换、比分、复盘、重连。
 - `test/race.test.js`：竞速模式 25 题、双人独立进度、一方完成后等待、双方完成后结算、1 秒冷却锁题、复盘、再来一局。
 - `test/mixed.test.js`：压力生成 3 万+ 道题，校验英译中/中译英/听音选词题干与选项零错配。
+- `test/admin-ui.test.js`：假 DOM 真跑 `admin.js`，校验卡密列表渲染（拉黑数在 available/used/revoked 三种状态都必须显示）。
 
-（另有 `room-lifecycle`、`vip`、`admin`、`messages`、`announcement` 五套，覆盖房间回收、激活码、站长后台、留言板与首页公告。）
+（另有 `room-lifecycle`、`vip`、`admin`、`admin-ui`、`messages`、`announcement` 六套，覆盖房间回收、激活码、站长后台（接口 + 列表渲染）、留言板与首页公告。）
 
 覆盖内容：
 
@@ -503,6 +504,7 @@ cet-arena/
 │  ├─ admin.test.js         # 站长后台（鉴权/列卡密/生成/解绑/爆破锁定）
 │  ├─ messages.test.js      # 留言板（内容校验/动态配额/额度归还/落盘/后台处理）
 │  ├─ announcement.test.js  # 首页公告（存储校验/接口鉴权/长度上限/no-store）
+│  ├─ admin-ui.test.js     # 后台列表渲染（拉黑数/操作按钮）
 │  ├─ solo-ui.test.js       # 前端假 DOM 集成（错词写入、着色、自动发音、答后释义）
 │  ├─ trial.test.js         # 限时闯关协议（关卡清单/限时/超时判定/结算/VIP 闸门）
 │  ├─ dom-contract.test.js  # DOM id 与脚本加载顺序契约
@@ -656,7 +658,7 @@ cet-arena/
 - [x] 同一台设备换 IP（宿舍 Wi-Fi ↔ 手机热点）仍可正常验证
 - [x] 旧数据（只有 boundIp、没有设备 Token）在同 IP 首次带 Token 时可平滑迁移
 - [x] 真机双浏览器验收：两个独立浏览器配置（不同 `device_token`、同一 IP）跑通上述拦截流程
-- [x] 自动化 `npm test` 通过（错词本 + DOM 契约 + 单人 UI + 单人协议 + 限时闯关 + 房间生命周期 + 激活码 + 抢答 + 竞速 + 混合题型 + 站长后台 + 留言板，共 13 套）
+- [x] 自动化 `npm test` 通过（错词本 + DOM 契约 + 单人 UI + 单人协议 + 限时闯关 + 房间生命周期 + 激活码 + 抢答 + 竞速 + 混合题型 + 站长后台 + 留言板，共 14 套）
 
 ### 声音唤醒与留言板测试清单
 
