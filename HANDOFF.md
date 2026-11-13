@@ -7,6 +7,7 @@
 > 强制格式（最新在最上）：`[YYYY-MM-DD HH:mm] 版本号 | 核心改动 | 遗留问题`
 > 每次任务结束**必须**在此节点顶部新增一行，无需用户提醒。
 
+- [2026-11-13 17:41] `20261112-vip17`（版本不变·本地凭据迁移，仅文档入库） | 服务器凭据迁出工作区：`rsh.py` / `authtest.py` / `put.py` + 私钥 `id_ed25519` 移至 `C:\Users\Yuan\.dsh\srvkey\`（工作区外、不属于任何 git 仓库），三者内部私钥路径改为 `C:/Users/Yuan/.dsh/srvkey/id_ed25519`（逐字节替换，`rsh.py` 的 UTF-8 BOM 保留，字节 2684 → 2637）；实测 `rsh.py "echo MIGRATE_OK"` 回显 `MIGRATE_OK`（需 `PYTHONPATH=.tools/pylibs` + 全权限）；文档侧原本**没有任何凭据路径记录**，故改为新增运行方式说明而非改路径；未重启服务 | 旧 `.tools\srvkey\` 仍余 `authorized_line.txt` / `id_ed25519.pub`(0B) / `known_hosts` 三个非凭据文件，未 `rmdir`
 - [2026-11-13 17:25] `20261112-vip17`（版本不变·仅后端） | **安全项落地：生产环境密码失效保护**。`server.js` 新增 `assertAdminPasswordInProduction()`：`NODE_ENV=production` 且 `ADMIN_PASSWORD` 缺失或 trim 后为空时，用 `fs.writeSync(2, …)` 写清原因再 `process.exit(1)`，绝不静默降级；`src/adminAuth.js` 的密码解析从 `a || b || c` 改为显式判断（「已设置但为空」直接抛错，只有完全未设置才回落本地默认值）；新增 `test/env-guard.test.js`（14 项断言，已验证摘掉守卫即失败）；测试链 14 → 15 套全绿；已部署：`git pull` 到 `44ed2fd` + **显式回注 `ADMIN_PASSWORD`/`VIP_UNLIMITED_CODES`/`NODE_ENV`/`PORT` 重启**（非裸 restart），restarts 25 → 26，线上实测守卫 exit=1、healthz 正常、两个变量长度不变 | 无
 - [2026-11-13 17:13] `20261112-vip17`（版本不变·纯文档） | 文档对齐：HANDOFF 正文三节（当前进度 / 线上版本 / 待办事项）改到 vip17 实测现状、与顶部时间轴消除矛盾，补 vip15–vip17 安全闭环摘要与 PM2/卡密实测值；README 修 4 处过期条目（§3 测试套数改 14 套且 `admin-ui` 不重复计数、§7 发音改本地 MP3、声音唤醒清单不再依赖 TTS 能力检测、§9 音频重跑脚本改 `build_audio_edge.py`）；未动代码、未改 `APP_VERSION`/`?v=`、未重启 | 无
 - [2026-11-13 17:05] `20261112-vip17`（已上线） | 收尾：把「前端缓存与版本号规约」写进 README（index 用 `APP_VERSION` + 三处 `?v=`；admin 用 `admin.html` 的 `?v=` + 服务端 no-store，不递增 APP_VERSION）；补全「未验证清单」；核对本轮版本 `vip16 → vip17` 已递增、`admin.html` 资源版本号 `vip14 → vip17` 已对齐；工作区干净，4 个 data 运行时文件均被 gitignore | 无
@@ -135,6 +136,10 @@
 - **`public/audio/` 要入库**（2869 个文件 / **26.38MB**），提交和 `git pull` 都会明显变慢，属正常。
 - **设备 Token 存在浏览器 `localStorage` 的 `cetArena.deviceToken.v1`**：清空浏览器数据、换无痕窗口、换浏览器都会生成新 Token，导致已绑定的码失效（需后台解绑），留言的 20 条额度也会重置。排查时可在 DevTools → Application → Local Storage 里看这个键的值，与后台「绑定设备」列的前 8 位比对。
 - 线上部署走 Deploy Key + `ssh.github.com:443`：`cd /opt/cet-arena && git pull && pm2 restart cet-arena`。
+- **服务器凭据已迁出工作区（2026-11-13）**：`rsh.py` / `authtest.py` / `put.py` 三个部署脚本与私钥 `id_ed25519` 现在 `C:\Users\Yuan\.dsh\srvkey\`，**位于工作区之外、不在任何 git 仓库管辖内**（向上到 `C:\` 无 `.git`），旧位置 `default-workspace\.tools\` 下的副本已移除，**不要再放回工作区**。三者内部的私钥路径均已改为 `C:/Users/Yuan/.dsh/srvkey/id_ed25519`。
+  - 运行方式：`cd C:\Users\Yuan\.dsh\srvkey` 后 `$env:PYTHONPATH='<工作区>\.tools\pylibs'`，再 `<python> rsh.py "<远程命令>"`（`rsh.py` 收第一个参数当远程命令，`--sudo` 前置表示 sudo 执行）。
+  - `paramiko`（5.1.0）装在 `.tools/pylibs`，该目录在普通沙箱下直接 `import` 会 `PermissionError: [Errno 13]`（DACL 无继承），**必须用全权限运行**；同理读取 `.dsh\srvkey\` 也在工作区外，需放宽。已实测 `rsh.py "echo MIGRATE_OK"` 返回 `MIGRATE_OK`、`[exit=0]`。
+  - 遗留：旧目录 `.tools\srvkey\` 还剩 `authorized_line.txt`、`id_ed25519.pub`（0 字节）、`known_hosts` 三个非凭据文件，故未 `rmdir`。
 - **版本号规约**：改 `index/app/wrongbook/styles` 必须升 `APP_VERSION` + `index.html` 三处 `?v=`；改 `admin.js/admin.css` **不用**升 `APP_VERSION`，但要改 `admin.html` 里对应 `?v=`。详见 README §7.1「版本号与缓存规约」。
 - `git` 不在系统 PATH 里，直接敲 `git` 会报「无法识别」。需用工作区自带的 portable git：
   ```powershell
