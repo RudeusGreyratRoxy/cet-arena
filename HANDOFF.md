@@ -7,6 +7,7 @@
 > 强制格式（最新在最上）：`[YYYY-MM-DD HH:mm] 版本号 | 核心改动 | 遗留问题`
 > 每次任务结束**必须**在此节点顶部新增一行，无需用户提醒。
 
+- [2026-11-13 17:25] `20261112-vip17`（版本不变·仅后端） | **安全项落地：生产环境密码失效保护**。`server.js` 新增 `assertAdminPasswordInProduction()`：`NODE_ENV=production` 且 `ADMIN_PASSWORD` 缺失或 trim 后为空时，用 `fs.writeSync(2, …)` 写清原因再 `process.exit(1)`，绝不静默降级；`src/adminAuth.js` 的密码解析从 `a || b || c` 改为显式判断（「已设置但为空」直接抛错，只有完全未设置才回落本地默认值）；新增 `test/env-guard.test.js`（14 项断言，已验证摘掉守卫即失败）；测试链 14 → 15 套全绿；已部署：`git pull` 到 `44ed2fd` + **显式回注 `ADMIN_PASSWORD`/`VIP_UNLIMITED_CODES`/`NODE_ENV`/`PORT` 重启**（非裸 restart），restarts 25 → 26，线上实测守卫 exit=1、healthz 正常、两个变量长度不变 | 无
 - [2026-11-13 17:13] `20261112-vip17`（版本不变·纯文档） | 文档对齐：HANDOFF 正文三节（当前进度 / 线上版本 / 待办事项）改到 vip17 实测现状、与顶部时间轴消除矛盾，补 vip15–vip17 安全闭环摘要与 PM2/卡密实测值；README 修 4 处过期条目（§3 测试套数改 14 套且 `admin-ui` 不重复计数、§7 发音改本地 MP3、声音唤醒清单不再依赖 TTS 能力检测、§9 音频重跑脚本改 `build_audio_edge.py`）；未动代码、未改 `APP_VERSION`/`?v=`、未重启 | 无
 - [2026-11-13 17:05] `20261112-vip17`（已上线） | 收尾：把「前端缓存与版本号规约」写进 README（index 用 `APP_VERSION` + 三处 `?v=`；admin 用 `admin.html` 的 `?v=` + 服务端 no-store，不递增 APP_VERSION）；补全「未验证清单」；核对本轮版本 `vip16 → vip17` 已递增、`admin.html` 资源版本号 `vip14 → vip17` 已对齐；工作区干净，4 个 data 运行时文件均被 gitignore | 无
 - [2026-11-13 13:50] `20261112-vip17`（待部署） | 修复后台「拉黑 N 台」不显示：`statusOf()` 原先把拉黑数拼在 `revoked` 分支内，`allow-rebind` 把状态改回 `available` 后提示就消失；改为**任何状态**只要 `revokedDeviceCount > 0` 都渲染「· 拉黑 N 台」；新增 `test/admin-ui.test.js`（假 DOM 真跑 `admin.js`：available/used/revoked 三态 + 0 台不显示 + 按钮渲染），已验证「删掉修复该用例立即失败」；测试链 13 → 14 套全绿；`APP_VERSION → vip17` | 待部署
@@ -42,6 +43,14 @@
 
 ## 当前进度
 
+- **【安全加固 · 已上线】生产环境站长密码失效保护（版本仍为 `20261112-vip17`，仅后端、不动前端）**：
+  - **问题**：`src/adminAuth.js` 原来写 `options.password || process.env.ADMIN_PASSWORD || DEFAULT_PASSWORD`，`||` 把空串当假值，因此 `ADMIN_PASSWORD=""`（注入失败/变量名写错/漏传值）会**静默降级**成仓库与 README 里都公开的 `boss2026`，且线上无任何告警。属于「失效保护缺失」，不是可用性优化。
+  - **修法（方案 A：守卫放单入口，爆炸半径最小）**：
+    - `server.js` 新增 `assertAdminPasswordInProduction()`，在 `createArenaServer()` 与 `listen()` 之前执行。仅当 `NODE_ENV === 'production'` 且 `ADMIN_PASSWORD` 为 null 或 trim 后为空时 → 打印明确中文原因 + `process.exit(1)`。用 `fs.writeSync(2, …)` 而不是 `console.error`，避免管道下异步写被 `process.exit` 截断（否则测试与 PM2 日志都看不到失败原因）。
+    - `src/adminAuth.js`：抽出 `resolvePassword()` 做显式判断——显式传入 > `ADMIN_PASSWORD` > 本地默认值；**「已设置但为空」抛错**，不再回落默认值；有效值按 trim 后使用。完全未设置时才用 `DEFAULT_PASSWORD`，保证 `npm run dev` 与既有测试不受影响（守卫只写在 `server.js`，测试不经该文件，故 14 套既有测试零改动全绿）。
+  - **测试**：新增 `test/env-guard.test.js`（14 项断言，已接入 `npm test`）。子进程 stderr 走**临时文件**而非 `stdio:'pipe'`，规避 DSH 沙箱的命名管道限制。已验证「摘掉守卫即失败」（无守卫时进程不退出，`status=null`）。测试链 **14 → 15 套全绿**。
+  - **`APP_VERSION` 未动**（纯后端，不涉及前端缓存）；`?v=` 未动；`ADMIN_PASSWORD` 线上一直存在（长度 11 ≠ 默认值 8 位），本次是补齐失效保护、不是修已被利用的漏洞。
+  - **部署**：`git pull` 到 `44ed2fd` → 从 `/proc` 读回 `ADMIN_PASSWORD`/`VIP_UNLIMITED_CODES`/`NODE_ENV`/`PORT` 后**显式回注** `pm2 restart --update-env`（非裸 restart）→ `pm2 save`。restarts 25 → 26，守卫在线上实测 `exit=1` 且服务未受冒烟影响，变量长度前后一致。
 - **【当前线上状态】`20261112-vip17` 已上线（2026-11-13 13:47 部署，PM2 在线、restarts 25；17:05 完成文档收尾）**：本轮 vip15 → vip17 三版全部是**激活码安全闭环**，没有新功能。
   - **vip15 · 堵「解绑后原设备自动复活」白嫖漏洞**：根因是 `reset()` 删掉 state 记录 → 原设备刷新时静默重验命中「首次使用」→ 自动重新绑定。改为 **revoked 语义**（保留记录 + `revokedDevices` 永久拉黑原设备，新设备仍可换机激活）；`verify()` 增加 `silent` 模式（刷新/重连**绝不允许首次绑定**）；新增 `vip:status` 按 deviceToken 做权威授权判定；后台解绑时向该设备所有在线连接推送 `vip:revoked`（只清 `socket.data.vip`，不断线、不打断当前对局）。
   - **vip16 · 补齐「换 token 绕过」漏洞**：封禁后该码对**所有设备**返回 `REVOKED`（清缓存/换浏览器也无效）；新增 `POST /api/admin/codes/allow-rebind`（封禁 → 未使用，保留 `revokedDevices` 黑名单）与 `POST /api/admin/codes/delete`（只删运行时新增码，种子码返回 `SEED_PROTECTED`）；设备指纹前移到 Socket.IO 握手 `auth.deviceToken`，保证被拉黑的在线设备也能被精准踢线。
@@ -76,9 +85,9 @@
 
 ## 线上版本
 
-- 服务版本：`20261112-vip17`，`GET /healthz` 实测 `{"ok":true,"rooms":0,"players":0,"words":2868,"version":"20261112-vip17"}`；PM2 进程 online、restarts 25、uptime 约 3 小时（2026-11-13 13:47 重启）
-- 服务器代码提交：`7ba9cbe chore: 对齐后台静态资源版本号到 vip17`（vip17 功能修复 `137cc5d` 在其前一分钟提交）
-- 服务器 HEAD：与本地一致（本轮 `docs:` 提交 `git pull` 后同为最新；**只改 README/HANDOFF 的文档提交不需要 `pm2 restart`**，Express 静态资源与文档都从磁盘读取，不进进程内存）
+- 服务版本：`20261112-vip17`，`GET /healthz` 实测 `{"ok":true,"rooms":0,"players":0,"words":2868,"version":"20261112-vip17"}`；PM2 进程 online、**restarts 26**、2026-11-13 17:25 因安全加固部署重启（此前 13:47 那次是 25）
+- 服务器代码提交：`44ed2fd fix: 生产环境缺少 ADMIN_PASSWORD 时拒绝启动，堵住静默回落默认口令`
+- 服务器 HEAD：与本地一致（该提交含 `server.js`，**必须重启才生效，已显式回注环境变量重启**；只改 README/HANDOFF 的文档提交则 `git pull` 即可，不需要 `pm2 restart`）
 - 前端版本号：本地 `20261112-vip17` / 线上 `20261112-vip17`（已同步）；`index.html` 三处 `?v=`、`admin.html` 两处 `?v=` 均为 `20261112-vip17`
 - 地址：<http://1.15.152.160:3000>　后台：<http://1.15.152.160:3000/admin>
 - 音频：`public/audio/` 2869 个文件（26.38MB），`/audio/<word>.mp3?v=2` 走 immutable 强缓存
@@ -91,7 +100,8 @@
 - 线上已全量同步 vip17，暂无阻塞项；vip15–vip17 的卡密安全闭环已完成并上线。
 - 真机待点 6 项见下方「未验证清单」，均不影响线上可用性，属「下次用手机顺手点一下」的范围。
 - 观察项：`emptyRoomGraceMs` = 60 秒是否够用（原 10 秒易误杀），若仍有玩家反馈对局中掉线后回不来可再放宽。
-- **安全硬伤（已排期，下一轮单独做）**：生产环境若缺少 `ADMIN_PASSWORD` 应拒绝启动或强制报错，避免静默回落到代码里的默认占位密码。老板已明确本轮只改文档、不动代码，此条等指令再做。
+- **安全硬伤已闭环（2026-11-13 17:25 上线）**：生产环境缺少 `ADMIN_PASSWORD` 时 `server.js` 直接拒绝启动，不再静默回落到默认占位密码；详见「当前进度 → 安全加固」。
+- 轮换密码注意：`--update-env` 会以当前 shell 环境覆盖进程环境，必须同时带上 `VIP_UNLIMITED_CODES`（以及 `NODE_ENV=production`），否则重启后服务会因守卫而**拒绝启动**。安全做法是从 `/proc/<旧 pid>/environ` 读回全部应用变量再回注，别裸敲 `pm2 restart`。
 - 轮换密码方式：`ADMIN_PASSWORD='新密码' pm2 restart cet-arena --update-env && pm2 save`（变量名固定，值只存在于服务器）。
 - 后续可选：留言按「已处理/待处理」分页、卡密按批次打标签、导出 CSV。
 - 重做音频：`PYTHONPATH=<.tools/pylibs-tts> python scripts/build_audio_edge.py --skip-existing`（需全权限 + 联网），换音源记得递增 `AUDIO_VERSION`。
