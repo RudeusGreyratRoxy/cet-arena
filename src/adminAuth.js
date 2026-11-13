@@ -3,7 +3,10 @@
 /**
  * 站长后台鉴权。
  *
- * - 超级密码默认写死 `boss2026`，可用环境变量 ADMIN_PASSWORD 覆盖（后续上线建议改成环境变量）。
+ * - 密码来源：显式传入 > 环境变量 ADMIN_PASSWORD > 本地默认占位值 `boss2026`。
+ *   生产环境由 `server.js` 的启动守卫强制要求注入 ADMIN_PASSWORD，缺失或留空直接拒绝启动，
+ *   因此默认占位值只在本地开发与自动化测试中生效。
+ * - 环境变量「已设置但为空」（trim 后无内容）一律抛错，不静默回落默认值。
  * - 登录成功后发一个随机 token，存在服务端内存 Map 里，同时下发 HttpOnly Cookie，
  *   刷新页面不会掉线；服务重启或 token 过期需重新登录。
  * - 同一 IP 连续输错 5 次锁 10 分钟，避免后台密码被暴力枚举。
@@ -27,10 +30,46 @@ function safeEqual(a, b) {
   return crypto.timingSafeEqual(left, right);
 }
 
+/**
+ * 决定站长密码来源。优先级：显式 `options.password` > 环境变量 `ADMIN_PASSWORD` > 本地默认值。
+ *
+ * 关键约束：**「设置了但为空」绝不回落默认值**。
+ * 旧写法是 `options.password || process.env.ADMIN_PASSWORD || DEFAULT_PASSWORD`，
+ * `||` 把空串当假值，于是 `ADMIN_PASSWORD=""`（注入失败、变量名写错、漏传值）会静默降级成
+ * 仓库与 README 里都公开的 `boss2026`——这正是「失效保护缺失」要堵的口子。
+ * 现在：显式传入或环境变量只要「非 null」，就必须 trim 后非空；为空直接抛错，
+ * 由 `server.js` 的启动守卫在生产环境提前拦下（见 `assertAdminPasswordInProduction`）。
+ * 真正「没设置」时才回落到本地默认值，保证 `npm run dev` 与测试不受影响。
+ */
+function resolvePassword(options = {}) {
+  const explicit = options.password;
+  if (explicit != null) {
+    const trimmed = String(explicit).trim();
+    if (trimmed === '') {
+      throw new Error(
+        '站长密码（options.password）已传入但为空，拒绝使用默认口令。'
+      );
+    }
+    return trimmed;
+  }
+
+  const fromEnv = process.env.ADMIN_PASSWORD;
+  if (fromEnv != null) {
+    const trimmed = String(fromEnv).trim();
+    if (trimmed === '') {
+      throw new Error(
+        'ADMIN_PASSWORD 已设置但为空（trim 后无内容），拒绝回落到默认口令。' +
+          '请注入非空密码，或删除该环境变量以使用本地默认值。'
+      );
+    }
+    return trimmed;
+  }
+
+  return DEFAULT_PASSWORD;
+}
+
 function createAdminAuth(options = {}) {
-  const password = String(
-    options.password || process.env.ADMIN_PASSWORD || DEFAULT_PASSWORD
-  );
+  const password = resolvePassword(options);
   const ttlMs = options.ttlMs || DEFAULT_TTL_MS;
   const maxFailures = options.maxFailures || DEFAULT_MAX_FAILURES;
   const lockMs = options.lockMs || DEFAULT_LOCK_MS;

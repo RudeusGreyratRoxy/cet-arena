@@ -58,7 +58,7 @@ PORT=3001 npm start
 
 健康检查：<http://localhost:3000/healthz>
 
-站长后台：<http://localhost:3000/admin>（默认密码 `boss2026`，可用环境变量 `ADMIN_PASSWORD` 覆盖）
+站长后台：<http://localhost:3000/admin>（本地开发默认密码 `boss2026`，可用环境变量 `ADMIN_PASSWORD` 覆盖）。**生产环境必须注入 `ADMIN_PASSWORD`，缺失或为空时服务会直接拒绝启动**（见 §4.6 与 §7）。
 
 > 如果 `node -v` 或 `npm -v` 报“找不到命令”，请先从 <https://nodejs.org/> 安装 Node.js LTS，或使用系统已有的 Node 版本管理器。不要用来源不明的运行时替代。
 
@@ -187,7 +187,7 @@ $env:CI="true"
 npm test
 ```
 
-该命令会运行十四套测试：
+该命令会运行十五套测试：
 
 - `test/wrongbook.test.js`：错词本纯逻辑（入库、去重、连对、清零、掌握移除、脏数据容错）。
 - `test/dom-contract.test.js`：`app.js` 引用的 DOM id 全部存在、脚本加载顺序正确。
@@ -198,8 +198,9 @@ npm test
 - `test/race.test.js`：竞速模式 25 题、双人独立进度、一方完成后等待、双方完成后结算、1 秒冷却锁题、复盘、再来一局。
 - `test/mixed.test.js`：压力生成 3 万+ 道题，校验英译中/中译英/听音选词题干与选项零错配。
 - `test/admin-ui.test.js`：假 DOM 真跑 `admin.js`，校验卡密列表渲染（拉黑数在 available/used/revoked 三种状态都必须显示）。
+- `test/env-guard.test.js`：站长密码失效保护——`NODE_ENV=production` 且 `ADMIN_PASSWORD` 缺失或 trim 后为空时，子进程跑 `server.js` 必须以退出码 1 结束并在 stderr 给出明确提示；同时覆盖「完全未设置才回落本地默认值」「空白值抛错」两条解析规则。
 
-（另有 `room-lifecycle`、`vip`、`admin`、`messages`、`announcement` 五套，覆盖房间回收、激活码、站长后台接口、留言板与首页公告；`admin-ui` 已在上面单列，不重复计数。连同上面 9 套共 **14 套**。）
+（另有 `room-lifecycle`、`vip`、`admin`、`messages`、`announcement` 五套，覆盖房间回收、激活码、站长后台接口、留言板与首页公告；`admin-ui` 与 `env-guard` 已在上面单列，不重复计数。连同上面 10 套共 **15 套**。）
 
 覆盖内容：
 
@@ -369,7 +370,7 @@ cd /opt/cet-arena && git pull && pm2 restart cet-arena
 - 日志轮转：`pm2-logrotate`（10M 上限、保留 5 份）；
 - 审计日志：`pm2 logs cet-arena --nostream | grep '\[audit\]'` 可查连接/IP/昵称/房间码/断开原因；
 - 激活码：新增卡密改 `data/vip_codes.json`，`type` 为 `unlimited`（站长/专属，不限次不绑设备）或 `once`（普通单人码，一码绑定一台设备）；重置某个码的「已用/绑定」状态，删 `data/vip_codes.state.json` 里对应键即可，改完重启 PM2；**线上已改为直接在 `/admin` 后台操作，无需再登录服务器改文件**；
-- 站长后台密码：由 PM2 环境变量 `ADMIN_PASSWORD` 提供，**不写进代码和仓库**（`src/adminAuth.js` 里的默认值仅本地开发占位）。轮换：`ADMIN_PASSWORD='新密码' pm2 restart cet-arena --update-env && pm2 save`；复核是否生效：`PID=$(pm2 pid cet-arena)` 后 `tr '\0' '\n' < /proc/$PID/environ | grep ADMIN_PASSWORD`；
+- 站长后台密码：由 PM2 环境变量 `ADMIN_PASSWORD` 提供，**不写进代码和仓库**（`src/adminAuth.js` 里的默认值仅本地开发占位）。轮换密码时务必带上该变量，否则 **`NODE_ENV=production` 下缺失密码会让服务拒绝启动**（进程直接退出、PM2 显示 errored），而不会静默回落到默认占位密码。轮换：`ADMIN_PASSWORD='新密码' pm2 restart cet-arena --update-env && pm2 save`；复核是否生效：`PID=$(pm2 pid cet-arena)` 后 `tr '\0' '\n' < /proc/$PID/environ | grep ADMIN_PASSWORD`；
 - 健康检查：`curl http://127.0.0.1:3000/healthz`，返回 `{"ok":true,"words":2868,...}`；
 - 词库/代码更新后必须重启 PM2，服务只在启动时读取 `data/words.json`。
 
@@ -508,6 +509,7 @@ cet-arena/
 │  ├─ solo-ui.test.js       # 前端假 DOM 集成（错词写入、着色、自动发音、答后释义）
 │  ├─ trial.test.js         # 限时闯关协议（关卡清单/限时/超时判定/结算/VIP 闸门）
 │  ├─ dom-contract.test.js  # DOM id 与脚本加载顺序契约
+│  ├─ env-guard.test.js     # 生产环境缺 ADMIN_PASSWORD 必须拒绝启动（失效保护）
 │  └─ remote-smoke.js       # 公网 WebSocket 完整验收
 ├─ server.js                # 启动入口
 ├─ package.json
@@ -550,7 +552,7 @@ cet-arena/
 - **激活码绑定主体是设备 Token，不是 IP**：早期版本按「首个验证 IP」绑定，但大学校园网普遍是 NAT，全校共用一个公网 IP，等于「一人买码、全校白嫖」。现在前端 `localStorage` 的 `cetArena.deviceToken.v1` 保存一个 32 位随机 Token（优先 `crypto.randomUUID()`，回退 `crypto.getRandomValues()` / `Math.random()`），首次打开页面即生成并在每次 `vip:verify` 时上传；后端把它作为唯一绑定主体，换设备一律拒绝，同设备换网络（宿舍 Wi-Fi ↔ 热点）照样放行。IP 降级为风控参考，只记录 `boundIp`（首次）与 `lastIp`（最近），不参与放行判断。后端会对 Token 做规范化（16–128 位、仅 `[A-Za-z0-9_-]`），缺失或非法直接返回 `DEVICE_REQUIRED`。
 - **激活码校验**：验证逻辑全同步执行，进入临界区前加内存锁，同一毫秒的并发请求只有一个能完成「校验 + 标记已用 + 落盘」；普通码首次使用即绑定设备 Token，Token 不一致直接拒绝。`room:create` 与 `room:join` 都要求 `socket.data.vip === true`，服务端二次校验，绕过前端也无效。；**静默重验**（`silent: true`，用于刷新/重连）绝不允许首次绑定，避免解绑后本地残留的码被静默绑回原设备；`vip:status` 按 deviceToken 返回权威授权状态，前端 init 用它兜底降级；后台解绑后服务端会向该设备的所有在线连接推送 `vip:revoked`，只清 `socket.data.vip` 与本地激活态（不断线、不打断当前对局），下次需要 VIP 权限时被拦截。；**封禁语义**：`reset` 只标记 revoked 并永久记录 `revokedDevices`，`verify` 对 revoked 码拒绝所有设备；换机需站长调用 `POST /api/admin/codes/allow-rebind`（保留黑名单）；`POST /api/admin/codes/delete` 仅删除运行时新增的码。设备指纹在 Socket.IO 握手 `auth.deviceToken` 与 `vip:verify` / `vip:status` 入口统一记录，保证「已封禁设备」的在线连接也能被精准踢线。
 - **旧数据兼容**：历史记录只有 `boundIp`、没有 `boundDevice`。这种记录在「同 IP 首次带 Token 请求」时会被平滑迁移（补写设备 Token），避免老客户突然全部失效；换 IP 则仍然拒绝。
-- **站长后台鉴权**：`/admin` 页面本身不含数据，进入后需提交站长密码。密码默认写死 `boss2026`，可用环境变量 `ADMIN_PASSWORD` 覆盖。校验成功后签发 32 字节随机 token 存于服务端内存，并通过 `HttpOnly` + `SameSite=Strict` Cookie 下发，刷新不掉线、JS 读不到；token 有效期 12 小时，服务重启后失效需重新登录。比较密码使用 `crypto.timingSafeEqual`（长度不等也走一次等长比较），同一 IP 连续错 5 次锁定 10 分钟。所有 `/api/admin/*` 数据与写操作接口在服务端二次校验，未登录统一返回 401，普通玩家即使猜到路径也拿不到任何卡密。
+- **站长后台鉴权**：`/admin` 页面本身不含数据，进入后需提交站长密码。密码来源优先级为 显式传入 > 环境变量 `ADMIN_PASSWORD` > 本地默认占位值 `boss2026`；**生产环境（`NODE_ENV=production`）下若 `ADMIN_PASSWORD` 缺失或 trim 后为空，`server.js` 会在监听端口之前 `process.exit(1)` 并打印明确原因，绝不静默降级成默认口令**——本地开发与自动化测试（不设 `NODE_ENV`）保持原有默认值行为，不受影响。校验成功后签发 32 字节随机 token 存于服务端内存，并通过 `HttpOnly` + `SameSite=Strict` Cookie 下发，刷新不掉线、JS 读不到；token 有效期 12 小时，服务重启后失效需重新登录。比较密码使用 `crypto.timingSafeEqual`（长度不等也走一次等长比较），同一 IP 连续错 5 次锁定 10 分钟。所有 `/api/admin/*` 数据与写操作接口在服务端二次校验，未登录统一返回 401，普通玩家即使猜到路径也拿不到任何卡密。
 - **后台登录态探测**：`GET /api/admin/session` 只返回 `{ authed: true|false }`（状态码恒为 200），供首屏静默判断，避免未登录时浏览器控制台刷 401 报错；真正的数据接口 `/api/admin/state` 仍严格 401。
 - **卡密生成**：`POST /api/admin/codes/generate` 按数量（1–100，超出拒绝）生成 6 位随机码，字符集去掉 `I/O/0/1` 以免客户手输混淆；生成前查重、批量内也去重。新码同时写入内存 `codes` 与 `data/vip_codes.json`（先写临时文件再 rename），因此**无需重启**即可被 `vip:verify` 校验使用。
 - **自定义卡密**：`POST /api/admin/codes/generate-custom`（需站长登录），只生成 `once` 码；归一化为大写后按 `/^[A-Z0-9_]{6,16}$/` 校验，查重覆盖三处——内存 `codes`（种子 + 运行时新增 + 环境变量专属码）、`vip_codes.state.json` 的历史绑定记录、写入前双检；命中一律拒绝、绝不覆盖，审计日志对码打码（`maskCode`）。
@@ -663,7 +665,7 @@ cet-arena/
 - [x] 同一台设备换 IP（宿舍 Wi-Fi ↔ 手机热点）仍可正常验证
 - [x] 旧数据（只有 boundIp、没有设备 Token）在同 IP 首次带 Token 时可平滑迁移
 - [x] 真机双浏览器验收：两个独立浏览器配置（不同 `device_token`、同一 IP）跑通上述拦截流程
-- [x] 自动化 `npm test` 通过（错词本 + DOM 契约 + 单人 UI + 单人协议 + 限时闯关 + 房间生命周期 + 激活码 + 抢答 + 竞速 + 混合题型 + 站长后台 + 留言板，共 14 套）
+- [x] 自动化 `npm test` 通过（错词本 + DOM 契约 + 单人 UI + 单人协议 + 限时闯关 + 房间生命周期 + 激活码 + 抢答 + 竞速 + 混合题型 + 站长后台 + 留言板 + 生产环境密码守卫，共 15 套）
 
 ### 声音唤醒与留言板测试清单
 
@@ -776,7 +778,7 @@ cet-arena/
 
 **站长后台进不去 / 忘了密码**
 
-- 默认密码在 `src/adminAuth.js` 的 `DEFAULT_PASSWORD`（仅本地开发占位），线上通过环境变量 `ADMIN_PASSWORD` 覆盖，改完需重启服务；
+- 默认密码在 `src/adminAuth.js` 的 `DEFAULT_PASSWORD`（**仅本地开发与测试占位**），线上通过环境变量 `ADMIN_PASSWORD` 覆盖，改完需重启服务；**生产环境必须注入 `ADMIN_PASSWORD`，缺失或为空白时服务会拒绝启动**（`NODE_ENV=production` 下启动即退出，代码见 `server.js` 的 `assertAdminPasswordInProduction`）；
 - 连续输错 5 次会锁定 10 分钟，等一会儿再试，或重启服务立即解锁（锁定状态只在内存里）；
 - 登录态存在服务端内存，服务重启后需要重新登录，属预期行为。
 
