@@ -546,7 +546,7 @@ cet-arena/
 - **自动播放兜底**：`audio.play()` 返回的 Promise 被拒（自动播放策略）时不弹错误，只给 🔊 按钮加 `is-nudge` 动画；`play()` 成功才把 `audioUnlocked` 置真。
 - **声音唤醒引导**：微信内置 / UC / 部分 Android 浏览器在用户手势前禁止播放。准备页/对局页顶部显示「🔊 点击唤醒声音」，点击后在同步手势调用链里播放 0.5 秒静音 MP3；`play()` resolve 即解锁并隐藏按钮，reject 则保留按钮提示重试。
 - **留言板存储与动态配额**：`data/messages.json`（已 gitignore）保存 `{ id, content, deviceHash, devicePrefix, ip, createdAt, status, reply, repliedAt }`；内容去掉控制字符并压缩空白，按 **码点** 计算长度，超过 50 字拒绝。配额按 `device_token` 的 SHA-256 **实时统计「未处理」条数**（`status !== 'handled'`），同一设备**同时最多 5 条未处理**留言；站长标记已处理或删除后，未处理数下降，额度自动归还。另加 5 秒冷却防连点。只落设备 Token 前 8 位与哈希，不保存完整凭据。公开入口走 socket `message:create`（无需激活码），后台读取/处理/删除/回复走受密码保护的 `/api/admin/messages*`。
-- **站长回复（vip18）**：`POST /api/admin/messages/reply`（`requireAdmin`，body `{id, reply}`）调用 `messages.reply()`；回复内容同样走 `cleanContent`，按码点 **≤100 字**，空回复与超长分别返回 `EMPTY_REPLY` / `REPLY_TOO_LONG`（HTTP 400），id 不存在返回 `NOT_FOUND`（HTTP 404）。**回复即处理**：写入 `reply` + `repliedAt` 的同时把 `status` 置为 `handled` 并补 `handledAt`，因此该设备的待处理额度立即释放。用户端通过 socket `message:mine`（payload `{deviceToken}`）拉自己的留言：服务端自己算 `sha256(deviceToken)` 再 `listByDevice()`，**客户端无法指定他人设备**，且只回 `{id, content, reply, repliedAt, createdAt, status}` 白名单字段。三处渲染（后台列表、后台回复区、用户端「我的留言」）全部 `createElement` + `textContent`，不拼 `innerHTML`。
+- **站长回复（vip18）**：`POST /api/admin/messages/reply`（`requireAdmin`，body `{id, reply}`）调用 `messages.reply()`；回复内容同样走 `cleanContent`，按码点 **≤100 字**，空回复与超长分别返回 `EMPTY_REPLY` / `REPLY_TOO_LONG`（HTTP 400），id 不存在返回 `NOT_FOUND`（HTTP 404）。**回复即处理**：写入 `reply` + `repliedAt` 的同时把 `status` 置为 `handled` 并补 `handledAt`，因此该设备的待处理额度立即释放。用户端通过 socket `message:mine`（payload `{deviceToken}`）拉自己的留言：服务端自己算 `sha256(deviceToken)` 再 `listByDevice()`，**客户端无法指定他人设备**，且只回 `{id, content, reply, repliedAt, createdAt, status}` 白名单字段。三处渲染（后台列表、后台回复区、用户端「我的留言」）全部 `createElement` + `textContent`，不拼 `innerHTML`。**回复草稿防清空**：后台列表每次重绘都是 `textContent = ''` + 重新 `buildMessageItem()`，输入框会被销毁重建，因此未提交的文字存在模块级 `replyDrafts`（`Map<留言id, 文字>`）里，重建时用 `replyDrafts.get(id) ?? (item.reply || '')` 回填；提交成功后 `delete` 再刷新。另外 30 秒轮询在 `document.activeElement` 是 `.reply-input` 时**跳过本轮 `loadMessages()`**，避免打断光标与输入法组合态——空闲时列表照常自动更新。
 - **重连**：创建/加入时返回随机 `sessionId`，刷新后 `room:resume` 恢复；竞速模式还会补发个人当前题、进度与惩罚截止时间。
 - **房间回收**：双方都离线时不再死等 30 分钟——对局已结束的房间**立即删除**；进行中的对局保留 `emptyRoomGraceMs`（默认 **60 秒**，移动端切后台/弱网重连留足时间）供「刷新重连」，期间有人通过 `room:resume` 回来就取消回收；60 秒兜底扫描仅作为最后保险。`deleteRoom` 会一并清理子定时器、`sessions`、`socketPlayers`、`socket.data.roomCode` 并 `io.socketsLeave(room.code)`，不留幽灵连接。
 - **激活码存储**：`data/vip_codes.json` 只存放种子卡密（入库、只读，`type` 为 `unlimited` 或 `once`）；后台批量生成/自定义生成的卡密写入 `data/vip_codes.custom.json`（已 gitignore），启动时合并进内存，避免线上生成卡密导致 `git pull` 冲突；运行状态（`used` / `boundDevice` / `boundIp` / `lastIp` / `usedAt`）写入 `data/vip_codes.state.json`（已 gitignore），先写临时文件再 rename，保证原子性，也避免 `git pull` 与线上状态冲突。
@@ -690,6 +690,7 @@ cet-arena/
 - [x] 用户端弹窗「我的留言」能显示本设备留言与「站长回复」，打开弹窗即拉取
 - [x] `message:mine` 只返回本设备记录（换设备 Token 查不到他人留言），且只回白名单字段
 - [x] 留言正文、站长回复全部用 `textContent` 渲染，无 `innerHTML` 拼接
+- [x] 回复框打字过程中列表重绘（轮询/标记已处理/删除/切过滤）不清空草稿；正在输入时轮询跳过留言列表刷新
 
 ### 站长后台测试清单
 

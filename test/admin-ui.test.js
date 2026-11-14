@@ -19,10 +19,9 @@ const adminSource = fs.readFileSync(
 
 function createElement(id) {
   const listeners = new Map();
-  return {
+  const node = {
     id,
     hidden: false,
-    textContent: '',
     className: '',
     value: '',
     disabled: false,
@@ -73,13 +72,36 @@ function createElement(id) {
     focus() {},
     select() {},
     remove() {},
+    /** 触发已登记的事件监听器（假 DOM 没有真实事件派发）。 */
+    fire(type, event) {
+      const fn = listeners.get(type);
+      if (fn) fn(event);
+    },
   };
+
+  // textContent 置空时同步清空子节点：真实 DOM 就是这个语义，
+  // renderMessages() 靠 `textContent = ''` 清列表，假 DOM 必须照做，否则子节点只增不减。
+  let text = '';
+  Object.defineProperty(node, 'textContent', {
+    get() {
+      return text;
+    },
+    set(value) {
+      text = value;
+      if (value === '') node.children.length = 0;
+    },
+    enumerable: true,
+    configurable: true,
+  });
+
+  return node;
 }
 
-function createEnv(codes) {
+function createEnv(codes, options = {}) {
   const elements = new Map();
   const document = {
     hidden: false,
+    activeElement: null,
     getElementById(id) {
       if (!elements.has(id)) elements.set(id, createElement(id));
       return elements.get(id);
@@ -111,7 +133,11 @@ function createEnv(codes) {
       messages: { total: 0, pending: 0 },
       announcement: { content: '', updatedAt: null },
     },
+    ...(options.responses || {}),
   };
+
+  const fetchCounts = new Map();
+  let pollCallback = null;
 
   const sandbox = {
     console,
@@ -134,12 +160,15 @@ function createEnv(codes) {
       return 0;
     },
     clearTimeout() {},
-    setInterval() {
+    setInterval(fn) {
+      pollCallback = fn;
       return 0;
     },
     clearInterval() {},
     fetch: async (url) => {
-      const body = responses[String(url)] || { ok: false, message: 'no stub' };
+      const key = String(url);
+      fetchCounts.set(key, (fetchCounts.get(key) || 0) + 1);
+      const body = responses[key] || { ok: false, message: 'no stub' };
       return {
         ok: body.ok !== false,
         status: body.ok === false ? 400 : 200,
@@ -154,7 +183,15 @@ function createEnv(codes) {
   vm.createContext(sandbox);
   vm.runInContext(adminSource, sandbox, { filename: 'admin.js' });
 
-  return { document, elements };
+  return {
+    document,
+    elements,
+    fetchCounts,
+    /** 手动触发一次 30 秒轮询回调（接上 startPolling 里注册的那个函数）。 */
+    runPoll() {
+      if (pollCallback) pollCallback();
+    },
+  };
 }
 
 const flush = async (rounds = 10) => {
@@ -241,6 +278,106 @@ function makeCode(overrides) {
   const usedText = textOf(envUsed.document.getElementById('codeRows').children[0]);
   assert(usedText.includes('解绑 / 封禁'), '已绑定行应有「解绑 / 封禁」');
   console.log('  ✓ 已绑定行含「解绑 / 封禁」');
+
+  console.log('=== 回复草稿不因列表重建而丢失（vip18 修复回归） ===');
+  const nowIso = new Date().toISOString();
+  const messagesPayload = {
+    ok: true,
+    messages: [
+      {
+        id: 'm1',
+        content: '听不到声音',
+        devicePrefix: 'aaaa0000',
+        ip: '10.0.0.1',
+        createdAt: nowIso,
+        status: 'new',
+        reply: null,
+        repliedAt: null,
+      },
+      {
+        id: 'm2',
+        content: '有回复的留言',
+        devicePrefix: 'bbbb1111',
+        ip: '10.0.0.2',
+        createdAt: nowIso,
+        status: 'handled',
+        reply: '已修复',
+        repliedAt: nowIso,
+      },
+    ],
+    stats: { total: 2, pending: 1 },
+  };
+
+  const envDraft = createEnv([makeCode({})], {
+    responses: { '/api/admin/messages': messagesPayload },
+  });
+  await flush();
+
+  // 切到「留言管理」触发首次加载
+  envDraft.document.getElementById('tabMessages').fire('click');
+  await flush();
+
+  const messageList = envDraft.document.getElementById('messageList');
+  assert.equal(messageList.children.length, 2, '应渲染 2 条留言');
+
+  const findReplyInput = (item) => {
+    const row = (item.children || []).find(
+      (child) =>
+        typeof child.className === 'string' && child.className.includes('msg-reply-row')
+    );
+    if (!row) return null;
+    return (row.children || []).find((child) => child.tag === 'input') || null;
+  };
+
+  const firstInput = findReplyInput(messageList.children[0]);
+  assert(firstInput, '第一条留言应有回复输入框');
+  assert(firstInput.className.includes('reply-input'), '输入框应带 reply-input 类');
+  assert.equal(firstInput.value, '', '既无草稿也无已存回复时应为空');
+  assert.equal(
+    findReplyInput(messageList.children[1]).value,
+    '已修复',
+    '已有回复且无草稿时应回填已保存回复'
+  );
+
+  // 模拟站长打字（真实 DOM 由 input 事件驱动草稿表）
+  firstInput.value = '这是正在打的草稿';
+  firstInput.fire('input');
+
+  // 触发整表重建：点过滤按钮 → setMessageFilter → renderMessages
+  envDraft.document.getElementById('filterAll').fire('click');
+  await flush();
+
+  const rebuiltList = envDraft.document.getElementById('messageList');
+  assert.equal(rebuiltList.children.length, 2, '重绘后仍应是 2 条，不能重复累积');
+  assert.equal(
+    findReplyInput(rebuiltList.children[0]).value,
+    '这是正在打的草稿',
+    '重绘后必须保留草稿（修复前这里会被清空）'
+  );
+
+  // 轮询：正在回复框输入时跳过 loadMessages
+  const beforeTypingPoll = envDraft.fetchCounts.get('/api/admin/messages') || 0;
+  envDraft.document.activeElement = findReplyInput(rebuiltList.children[0]);
+  envDraft.runPoll();
+  await flush();
+  assert.equal(
+    envDraft.fetchCounts.get('/api/admin/messages') || 0,
+    beforeTypingPoll,
+    '正在输入时轮询不应重新拉留言列表'
+  );
+
+  // 轮询：未输入时照常刷新
+  envDraft.document.activeElement = null;
+  envDraft.runPoll();
+  await flush();
+  assert(
+    (envDraft.fetchCounts.get('/api/admin/messages') || 0) > beforeTypingPoll,
+    '空闲时轮询应重新拉留言列表'
+  );
+
+  console.log('  ✓ 输入草稿后整表重建仍保留');
+  console.log('  ✓ 无草稿时回填已保存回复');
+  console.log('  ✓ 输入中轮询跳过刷新、空闲时照常刷新');
 
   console.log('');
   console.log('后台列表渲染测试通过。');

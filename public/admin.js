@@ -69,6 +69,11 @@
     announcementDirty: false,
   };
 
+  // 留言回复草稿表：key = 留言 id，value = 输入框里尚未提交的文字。
+  // renderMessages() 会整段重建列表（textContent = '' + 重新 build），输入框随之被销毁，
+  // 所以必须把草稿存在这里、重建时回填，否则轮询/标记已处理/删除/切过滤都会清掉正在打的字。
+  const replyDrafts = new Map();
+
   // ---------------------------------------------------------------- 工具
 
   let toastTimer = null;
@@ -454,10 +459,12 @@
 
     const replyInput = document.createElement('input');
     replyInput.type = 'text';
-    replyInput.className = 'msg-reply-input';
+    replyInput.className = 'msg-reply-input reply-input';
     replyInput.maxLength = 100;
     replyInput.placeholder = item.reply ? '修改回复（最多 100 字）' : '写回复（最多 100 字）';
-    replyInput.value = item.reply || '';
+    // 有未提交草稿时优先回填草稿，否则显示已保存的回复。
+    replyInput.value = replyDrafts.get(item.id) ?? (item.reply || '');
+    replyInput.addEventListener('input', () => replyDrafts.set(item.id, replyInput.value));
     replyRow.appendChild(replyInput);
 
     const replyBtn = document.createElement('button');
@@ -557,6 +564,8 @@
       return;
     }
     toast(res.data.message || '回复已发送');
+    // 提交成功后草稿已失效，清掉再从服务端拉最新列表（此时输入框应显示刚保存的回复）。
+    replyDrafts.delete(id);
     await loadMessages();
   }
 
@@ -615,7 +624,17 @@
     state.pollTimer = setInterval(() => {
       if (state.busy || document.hidden) return;
       loadState().then(() => {
-        if (state.activeTab === 'messages') loadMessages();
+        if (state.activeTab !== 'messages') return;
+        // 正在回复框里打字时跳过本轮列表刷新：重建列表会销毁输入框，
+        // 即使草稿能回填，光标位置与输入法组合态也会被打断。
+        // 用 className 判断（而不是 closest），真机与测试假 DOM 都成立。
+        const active = document.activeElement;
+        const typingReply =
+          active &&
+          typeof active.className === 'string' &&
+          active.className.split(/\s+/).includes('reply-input');
+        if (typingReply) return;
+        loadMessages();
       });
     }, 30_000);
   }
