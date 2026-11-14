@@ -13,6 +13,8 @@ const fs = require('fs');
 const path = require('path');
 
 const MAX_CONTENT = 50;
+// 站长回复长度上限（码点计），比留言正文宽松，够写一两句解释。
+const MAX_REPLY = 100;
 // 动态配额：同一设备「未处理」留言的并发上限，站长处理后自动归还额度。
 const MAX_PER_DEVICE = 5;
 const MIN_INTERVAL_MS = 5_000;
@@ -121,6 +123,9 @@ function createMessageStore(options = {}) {
       ip: input.ip || null,
       createdAt: now().toISOString(),
       status: 'new',
+      // 站长回复：默认 null，由 reply() 写入；老记录没有这两个键，读取处一律按 null 处理。
+      reply: null,
+      repliedAt: null,
     };
 
     db.messages.push(record);
@@ -145,7 +150,44 @@ function createMessageStore(options = {}) {
     return { ok: true, message: '已删除', record: removed };
   }
 
-  return { add, list, markHandled, remove, stats, file };
+  /**
+   * 站长回复。写入 reply + repliedAt 后，该条留言自动变为「已处理」，
+   * 因此这台设备的待处理额度会被释放（回复即处理，站长不用再点一次「标记已处理」）。
+   * @returns {{ok: boolean, code?: string, message: string, record?: object}}
+   */
+  function reply(id, text) {
+    const record = db.messages.find((item) => item.id === id);
+    if (!record) return { ok: false, code: 'NOT_FOUND', message: '留言不存在' };
+
+    const body = cleanContent(text);
+    const length = Array.from(body).length;
+    if (!body) {
+      return { ok: false, code: 'EMPTY_REPLY', message: '回复内容不能为空' };
+    }
+    if (length > MAX_REPLY) {
+      return { ok: false, code: 'REPLY_TOO_LONG', message: `回复最多 ${MAX_REPLY} 字` };
+    }
+
+    const repliedAt = now().toISOString();
+    record.reply = body;
+    record.repliedAt = repliedAt;
+    record.status = 'handled';
+    record.handledAt = repliedAt;
+    persist();
+    return { ok: true, message: '回复已发送', record };
+  }
+
+  /**
+   * 按设备查自己的留言（用户端「我的留言」），只认 deviceHash，不认明文 token。
+   * deviceHash 为空时返回空数组——调用方负责先校验 token，避免空哈希匹配到脏记录。
+   */
+  function listByDevice(deviceHash) {
+    const hash = String(deviceHash == null ? '' : deviceHash).trim();
+    if (!hash) return [];
+    return db.messages.filter((item) => item.deviceHash === hash).slice().sort(byNewestFirst);
+  }
+
+  return { add, list, markHandled, remove, reply, listByDevice, stats, file };
 }
 
-module.exports = { createMessageStore, cleanContent, MAX_CONTENT, MAX_PER_DEVICE };
+module.exports = { createMessageStore, cleanContent, MAX_CONTENT, MAX_REPLY, MAX_PER_DEVICE };

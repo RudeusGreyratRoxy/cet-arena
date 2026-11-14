@@ -9,7 +9,7 @@
     device: 'cetArena.deviceToken.v1',
     announcement: 'cetArena.announcementSeen.v1',
   };
-  const APP_VERSION = '20261112-vip17';
+  const APP_VERSION = '20261112-vip18';
 
   const VIEW_IDS = ['loading', 'home', 'room', 'game', 'result', 'solo', 'levels', 'trial'];
 
@@ -155,6 +155,9 @@
     contactCount: document.getElementById('contactCount'),
     contactSubmitBtn: document.getElementById('contactSubmitBtn'),
     contactError: document.getElementById('contactError'),
+    contactMine: document.getElementById('contactMine'),
+    contactMineHint: document.getElementById('contactMineHint'),
+    contactMineList: document.getElementById('contactMineList'),
     toast: document.getElementById('toast'),
   };
 
@@ -178,6 +181,7 @@
     contact: {
       open: false,
       busy: false,
+      mineBusy: false,
     },
     ping: {
       timer: null,
@@ -1706,9 +1710,84 @@
     el.contactInput.value = '';
     updateContactCount();
     document.body.classList.add('vip-open');
+    loadMyMessages();
     window.setTimeout(() => {
       if (!el.contactOverlay.hidden) el.contactInput.focus();
     }, 60);
+  }
+
+  /** 「我的留言」加载：服务端按 deviceToken 的哈希反查，只回本设备的记录。 */
+  async function loadMyMessages() {
+    if (!el.contactMineList || state.contact.mineBusy) return;
+    state.contact.mineBusy = true;
+    if (el.contactMineHint) {
+      el.contactMineHint.hidden = false;
+      el.contactMineHint.textContent = '加载中…';
+    }
+    el.contactMineList.textContent = '';
+
+    const result = await request('message:mine', { deviceToken: deviceToken() }, 8000);
+    state.contact.mineBusy = false;
+
+    if (!result || !result.ok) {
+      if (el.contactMineHint) el.contactMineHint.textContent = '留言加载失败，请稍后重试';
+      return;
+    }
+
+    const list = Array.isArray(result.messages) ? result.messages : [];
+    renderMyMessages(list);
+  }
+
+  /** 纯 textContent 渲染，任何用户/站长文本都不参与 HTML 拼接。 */
+  function renderMyMessages(list) {
+    if (!el.contactMineList) return;
+    el.contactMineList.textContent = '';
+
+    if (el.contactMineHint) {
+      el.contactMineHint.hidden = list.length > 0;
+      el.contactMineHint.textContent = list.length > 0 ? '' : '还没有留言记录。';
+    }
+
+    for (const item of list) {
+      const li = document.createElement('li');
+      li.className = 'contact-mine-item';
+
+      const content = document.createElement('p');
+      content.className = 'contact-mine-content';
+      content.textContent = item.content;
+      li.appendChild(content);
+
+      const time = document.createElement('span');
+      time.className = 'contact-mine-time';
+      time.textContent = formatMineTime(item.createdAt);
+      li.appendChild(time);
+
+      if (item.reply) {
+        const replyBox = document.createElement('div');
+        replyBox.className = 'contact-mine-reply';
+
+        const tag = document.createElement('span');
+        tag.className = 'contact-mine-reply-tag';
+        tag.textContent = '站长回复';
+        replyBox.appendChild(tag);
+
+        const replyText = document.createElement('p');
+        replyText.className = 'contact-mine-reply-text';
+        replyText.textContent = item.reply;
+        replyBox.appendChild(replyText);
+
+        li.appendChild(replyBox);
+      }
+
+      el.contactMineList.appendChild(li);
+    }
+  }
+
+  function formatMineTime(value) {
+    const time = new Date(value);
+    if (Number.isNaN(time.getTime())) return '';
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${time.getFullYear()}-${pad(time.getMonth() + 1)}-${pad(time.getDate())} ${pad(time.getHours())}:${pad(time.getMinutes())}`;
   }
 
   function closeContact() {

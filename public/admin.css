@@ -615,6 +615,55 @@ tr.row-used td {
   min-height: 36px;
 }
 
+/* 站长回复（vip18）：展示区 + 输入行 */
+.msg-reply {
+  margin: 0 0 8px;
+  padding: 8px 10px;
+  border-left: 3px solid var(--accent, #4f8cff);
+  background: rgba(79, 140, 255, 0.08);
+  border-radius: 6px;
+}
+
+.msg-reply-tag {
+  display: inline-block;
+  margin-bottom: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent, #4f8cff);
+}
+
+.msg-reply-text {
+  margin: 0 0 4px;
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 1.6;
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
+.msg-reply-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.msg-reply-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 36px;
+  padding: 6px 10px;
+  border: 1px solid var(--line, #2b3446);
+  border-radius: 8px;
+  background: var(--panel, #141a26);
+  color: var(--ink);
+  font-size: 14px;
+}
+
+.msg-reply-row .btn {
+  flex: 0 0 auto;
+  min-height: 36px;
+}
+
 /* 公告管理（vip12） */
 .announce-textarea {
   width: 100%;

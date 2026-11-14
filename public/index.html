@@ -10,7 +10,7 @@
     />
     <title>CET Arena · 双人词汇对战</title>
     <link rel="icon" href="data:,">
-    <link rel="stylesheet" href="/styles.css?v=20261112-vip17" />
+    <link rel="stylesheet" href="/styles.css?v=20261112-vip18" />
   </head>
   <body data-view="loading">
     <div class="ambient ambient-one" aria-hidden="true"></div>
@@ -523,6 +523,13 @@
           <button class="contact-submit" id="contactSubmitBtn" type="button">发送</button>
         </div>
         <p class="contact-error" id="contactError" role="alert" hidden></p>
+
+        <!-- 我的留言：只显示本设备自己的留言与站长回复 -->
+        <section class="contact-mine" id="contactMine">
+          <h3 class="contact-mine-title">我的留言</h3>
+          <p class="contact-mine-hint" id="contactMineHint">加载中…</p>
+          <ul class="contact-mine-list" id="contactMineList"></ul>
+        </section>
       </div>
     </div>
 
@@ -538,7 +545,7 @@
     <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
 
     <script src="/socket.io/socket.io.min.js"></script>
-    <script src="/wrongbook.js?v=20261112-vip17"></script>
-    <script src="/app.js?v=20261112-vip17"></script>
+    <script src="/wrongbook.js?v=20261112-vip18"></script>
+    <script src="/app.js?v=20261112-vip18"></script>
   </body>
 </html>

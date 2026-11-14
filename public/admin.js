@@ -407,6 +407,21 @@
     content.textContent = item.content;
     li.appendChild(content);
 
+    // 已有回复：紧贴留言正文下方展示（同样只用 textContent，不拼 HTML）。
+    if (item.reply) {
+      const replyBox = document.createElement('div');
+      replyBox.className = 'msg-reply';
+      replyBox.appendChild(textSpan('站长回复', 'msg-reply-tag'));
+      const replyText = document.createElement('p');
+      replyText.className = 'msg-reply-text';
+      replyText.textContent = item.reply;
+      replyBox.appendChild(replyText);
+      if (item.repliedAt) {
+        replyBox.appendChild(textSpan(formatTime(item.repliedAt), 'msg-time'));
+      }
+      li.appendChild(replyBox);
+    }
+
     const meta = document.createElement('div');
     meta.className = 'msg-meta';
     meta.appendChild(textSpan(`设备 ${item.devicePrefix || '—'}`, ''));
@@ -432,6 +447,27 @@
     actions.appendChild(delBtn);
 
     li.appendChild(actions);
+
+    // 回复输入区：maxlength=100，已有回复时预填，保存即「回复」。
+    const replyRow = document.createElement('div');
+    replyRow.className = 'msg-reply-row';
+
+    const replyInput = document.createElement('input');
+    replyInput.type = 'text';
+    replyInput.className = 'msg-reply-input';
+    replyInput.maxLength = 100;
+    replyInput.placeholder = item.reply ? '修改回复（最多 100 字）' : '写回复（最多 100 字）';
+    replyInput.value = item.reply || '';
+    replyRow.appendChild(replyInput);
+
+    const replyBtn = document.createElement('button');
+    replyBtn.type = 'button';
+    replyBtn.className = 'btn tiny';
+    replyBtn.textContent = '回复';
+    replyBtn.dataset.replyId = item.id;
+    replyRow.appendChild(replyBtn);
+
+    li.appendChild(replyRow);
     return li;
   }
 
@@ -493,6 +529,35 @@
     state.messageStats = res.data.stats || state.messageStats;
     renderMessages();
     toast(handled ? '已标记为已处理' : '已恢复为待处理');
+  }
+
+  async function replyMessage(id, text) {
+    if (!id || state.busy) return;
+    const body = String(text == null ? '' : text).trim();
+    if (!body) {
+      toast('回复内容不能为空');
+      return;
+    }
+    if (Array.from(body).length > 100) {
+      toast('回复最多 100 字');
+      return;
+    }
+    setBusy(true);
+    const res = await request('/api/admin/messages/reply', {
+      method: 'POST',
+      body: { id, reply: body },
+    });
+    setBusy(false);
+    if (res.status === 401) {
+      showLogin('登录已过期，请重新登录');
+      return;
+    }
+    if (!res.ok) {
+      toast(res.data.message || '回复失败');
+      return;
+    }
+    toast(res.data.message || '回复已发送');
+    await loadMessages();
   }
 
   async function deleteMessage(id) {
@@ -773,8 +838,26 @@
         handleMessage(handleBtn.dataset.handle, handleBtn.dataset.next === '1');
         return;
       }
+      const replyBtn = event.target.closest('button[data-reply-id]');
+      if (replyBtn) {
+        const row = replyBtn.closest('.msg-reply-row');
+        const input = row ? row.querySelector('input') : null;
+        replyMessage(replyBtn.dataset.replyId, input ? input.value : '');
+        return;
+      }
       const delBtn = event.target.closest('button[data-delete]');
       if (delBtn) deleteMessage(delBtn.dataset.delete);
+    });
+
+    // 回复框里按 Enter 直接发送，省一次点击（移动端软键盘的「完成」也走这里）。
+    ui.messageList.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter') return;
+      const input = event.target.closest('input.msg-reply-input');
+      if (!input) return;
+      event.preventDefault();
+      const row = input.closest('.msg-reply-row');
+      const btn = row ? row.querySelector('button[data-reply-id]') : null;
+      if (btn) replyMessage(btn.dataset.replyId, input.value);
     });
 
     ui.codeRows.addEventListener('click', (event) => {

@@ -13,7 +13,7 @@ const assert = require('assert/strict');
 const fs = require('fs');
 const path = require('path');
 const { io } = require('socket.io-client');
-const { createMessageStore, MAX_CONTENT } = require('../src/messages');
+const { createMessageStore, MAX_CONTENT, MAX_REPLY } = require('../src/messages');
 const { createArenaServer } = require('../src/app');
 const { APP_VERSION } = require('../src/version');
 
@@ -156,6 +156,30 @@ async function main() {
     ok('删除后只剩 1 条', store.list().length === 1);
     ok('删除不存在的留言被拒', store.remove('nope').code === 'NOT_FOUND');
 
+    console.log('=== 5.1 站长回复（vip18） ===');
+    store = freshStore();
+    const replyTargetId = store.add({ content: '听不到声音', deviceToken: DEVICE_A }).record.id;
+    const replied = store.reply(replyTargetId, '已经修好了，请刷新页面');
+    ok('回复成功', replied.ok === true && replied.record.reply === '已经修好了，请刷新页面');
+    ok('回复后自动变为已处理', replied.record.status === 'handled');
+    ok(
+      '回复时间已写入',
+      typeof replied.record.repliedAt === 'string' && replied.record.repliedAt.length > 0
+    );
+    ok('回复后待处理数归零', store.stats().pending === 0);
+    ok('回复空内容被拒', store.reply(replyTargetId, '   ').code === 'EMPTY_REPLY');
+    ok(
+      '回复超过 100 字被拒',
+      store.reply(replyTargetId, '字'.repeat(MAX_REPLY + 1)).code === 'REPLY_TOO_LONG'
+    );
+    ok('回复正好 100 字可以通过', store.reply(replyTargetId, '字'.repeat(MAX_REPLY)).ok === true);
+    ok('回复不存在的留言被拒', store.reply('nope', '你好').code === 'NOT_FOUND');
+
+    const mineHash = readFile().messages[0].deviceHash;
+    ok('listByDevice 能查到本设备留言', store.listByDevice(mineHash).length === 1);
+    ok('listByDevice 不返回别的设备', store.listByDevice('deadbeef').length === 0);
+    ok('listByDevice 空哈希返回空数组', store.listByDevice('').length === 0);
+
     console.log('=== 6. 公开接口 + 后台接口（HTTP / socket）===');
     fs.rmSync(file, { force: true });
     const arena = createArenaServer({
@@ -193,6 +217,68 @@ async function main() {
     ok('留言含 IP 风控字段', 'ip' in listRes.messages[0]);
 
     const msgId = listRes.messages[0].id;
+
+    // --- 回复接口鉴权：未登录必须 401 ---
+    const guardReply = await fetch(`${base}/api/admin/messages/reply`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: msgId, reply: '未登录回复' }),
+    });
+    ok('未登录调回复接口 401', guardReply.status === 401);
+
+    // --- 回复成功，并自动转为已处理 ---
+    const replyRes = await (
+      await fetch(`${base}/api/admin/messages/reply`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Cookie: cookie },
+        body: JSON.stringify({ id: msgId, reply: '已为你修复，请重试' }),
+      })
+    ).json();
+    ok('后台回复成功', replyRes.ok === true && replyRes.record.reply === '已为你修复，请重试');
+    ok('回复后自动变已处理', replyRes.record.status === 'handled');
+    ok('回复后待处理数归零', replyRes.stats.pending === 0, JSON.stringify(replyRes.stats));
+    ok(
+      '回复时间已回传',
+      typeof replyRes.record.repliedAt === 'string' && replyRes.record.repliedAt.length > 0
+    );
+
+    // --- 回复超长 / 目标不存在 ---
+    const longReply = await fetch(`${base}/api/admin/messages/reply`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Cookie: cookie },
+      body: JSON.stringify({ id: msgId, reply: '字'.repeat(100 + 1) }),
+    });
+    ok('回复超过 100 字返回 400', longReply.status === 400);
+
+    const missingReply = await fetch(`${base}/api/admin/messages/reply`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Cookie: cookie },
+      body: JSON.stringify({ id: 'not-exist', reply: '你好' }),
+    });
+    ok('回复不存在的留言返回 404', missingReply.status === 404);
+
+    // --- 用户端 message:mine：只看得到自己的留言与回复 ---
+    const mineSocket = await connect(base);
+    const mineA = await call(mineSocket, 'message:mine', { deviceToken: DEVICE_A });
+    ok('message:mine 查到本设备留言', mineA.ok === true && mineA.messages.length === 1);
+    ok('message:mine 能拿到站长回复', mineA.messages[0].reply === '已为你修复，请重试');
+    ok(
+      'message:mine 只回白名单字段',
+      Object.keys(mineA.messages[0]).sort().join(',') ===
+        ['content', 'createdAt', 'id', 'reply', 'repliedAt', 'status'].sort().join(',')
+    );
+
+    const mineB = await call(mineSocket, 'message:mine', { deviceToken: DEVICE_B });
+    ok('message:mine 查不到别的设备的留言', mineB.ok === true && mineB.messages.length === 0);
+    ok(
+      'message:mine 不回他人留言内容',
+      !JSON.stringify(mineB).includes('听不到声音')
+    );
+
+    const mineNoToken = await call(mineSocket, 'message:mine', { deviceToken: '' });
+    ok('message:mine 缺少设备 Token 被拒', mineNoToken.ok === false && mineNoToken.code === 'DEVICE_REQUIRED');
+    mineSocket.close();
+
     const handleRes = await (
       await fetch(`${base}/api/admin/messages/handle`, {
         method: 'POST',

@@ -2797,6 +2797,84 @@ a:focus-visible {
   font-size: 13px;
 }
 
+/* 我的留言（vip18）：弹窗内展示本设备留言与站长回复 */
+.contact-mine {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.contact-mine-title {
+  margin: 0 0 6px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #e8ecf4;
+}
+
+.contact-mine-hint {
+  margin: 0;
+  color: #8b94a7;
+  font-size: 12px;
+}
+
+.contact-mine-list {
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.contact-mine-item {
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.contact-mine-item:last-child {
+  margin-bottom: 0;
+}
+
+.contact-mine-content {
+  margin: 0 0 4px;
+  color: #e8ecf4;
+  font-size: 13px;
+  line-height: 1.5;
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
+.contact-mine-time {
+  color: #8b94a7;
+  font-size: 11px;
+}
+
+.contact-mine-reply {
+  margin: 6px 0 0;
+  padding: 6px 8px;
+  border-left: 3px solid #4f8cff;
+  border-radius: 4px;
+  background: rgba(79, 140, 255, 0.12);
+}
+
+.contact-mine-reply-tag {
+  display: block;
+  margin-bottom: 2px;
+  color: #7db0ff;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.contact-mine-reply-text {
+  margin: 0;
+  color: #dfe6f2;
+  font-size: 13px;
+  line-height: 1.5;
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
 @media (max-width: 480px) {
   .contact-fab {
     right: 12px;

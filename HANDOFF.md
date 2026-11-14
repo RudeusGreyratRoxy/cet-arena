@@ -7,6 +7,7 @@
 > 强制格式（最新在最上）：`[YYYY-MM-DD HH:mm] 版本号 | 核心改动 | 遗留问题`
 > 每次任务结束**必须**在此节点顶部新增一行，无需用户提醒。
 
+- [2026-11-14 11:20] `20261112-vip18` | **新功能：留言回复**。数据层 `src/messages.js` 记录加 `reply`/`repliedAt`（默认 null，version 仍 1，当前 0 条记录无需迁移）、新增 `reply(id,text)`（≤100 码点，**回复即置 status=handled 并补 handledAt**，额度立即释放）与 `listByDevice(deviceHash)`；后端新增 socket `message:mine`（服务端算 deviceHash，**客户端无法指定他人设备**，只回白名单字段）与 `POST /api/admin/messages/reply`（404=不存在 / 400=空或超长，审计只记长度）；后台 `buildMessageItem` 加回复展示区 + `maxlength=100` 输入行（Enter 可直接发送）；用户端弹窗新增「我的留言」区，打开即拉取；三处渲染全部 `createElement`+`textContent`；`APP_VERSION → vip18`、index 三处 `?v=` 同步、`admin.html → 20261113-vip18`；`messages.test.js` 43 → **67 项断言**，15 套全绿 | 无
 - [2026-11-13 17:51] `20261112-vip17`（版本不变·本地凭据收尾） | **凭据迁移闭环**：`.tools/srvkey` 7 个文件迁至 `C:\Users\Yuan\.dsh\srvkey\`（工作区外、非任何 git 仓库），三个脚本内私钥路径已改、`rsh.py` 实测连通（回显 `MIGRATE_OK`）；服务器拉齐 `8d78468 → 54a02af`（纯文档，未重启，restarts 26）；顺带修正 `现为 14 套 → 15 套` | 无
 - [2026-11-13 17:43] `20261112-vip17`（版本不变·本地凭据迁移收尾） | 余下三个配套文件 `authorized_line.txt` / `id_ed25519.pub` / `known_hosts` 移入 `C:\Users\Yuan\.dsh\srvkey\`，旧 `.tools\srvkey\` 已空并删除；复核工作区无脚本残留旧路径（三个脚本均用 `AutoAddPolicy`、不读 `known_hosts`，行为不变）；工作区剩余 `srvkey` 字样仅本文件的新位置说明 | 无
 - [2026-11-13 17:41] `20261112-vip17`（版本不变·本地凭据迁移，仅文档入库） | 服务器凭据迁出工作区：`rsh.py` / `authtest.py` / `put.py` + 私钥 `id_ed25519` 移至 `C:\Users\Yuan\.dsh\srvkey\`（工作区外、不属于任何 git 仓库），三者内部私钥路径改为 `C:/Users/Yuan/.dsh/srvkey/id_ed25519`（逐字节替换，`rsh.py` 的 UTF-8 BOM 保留，字节 2684 → 2637）；实测 `rsh.py "echo MIGRATE_OK"` 回显 `MIGRATE_OK`（需 `PYTHONPATH=.tools/pylibs` + 全权限）；文档侧原本**没有任何凭据路径记录**，故改为新增运行方式说明而非改路径；未重启服务 | 旧 `.tools\srvkey\` 仍余 `authorized_line.txt` / `id_ed25519.pub`(0B) / `known_hosts` 三个非凭据文件，未 `rmdir`
@@ -46,6 +47,12 @@
 
 ## 当前进度
 
+- **【新功能 · 已上线】留言回复（版本 `20261112-vip18`，2026-11-14）**：
+  - **数据层**：`src/messages.js` 记录新增 `reply` / `repliedAt`（默认 `null`，`version` 仍 1；当时 `messages.json` 为 0 条记录，无需迁移）。新增 `reply(id, text)`：`cleanContent` 后按码点 ≤ **100 字**，空回复 `EMPTY_REPLY`、超长 `REPLY_TOO_LONG`、id 不存在 `NOT_FOUND`；写入回复的**同时**把 `status` 置 `handled` 并补 `handledAt`——回复即处理，额度立刻归还。新增 `listByDevice(deviceHash)`（倒序，空哈希返回空数组）。
+  - **后端**：socket `message:mine`（payload `{deviceToken}`）由服务端自己算 `sha256(deviceToken)` 再反查，**客户端无法指定他人设备**，只回 `{id, content, reply, repliedAt, createdAt, status}`；`POST /api/admin/messages/reply`（`requireAdmin`）区分 400/404，审计只记 id 与长度、不记正文。原 4 个管理接口未改动。
+  - **前端**：后台 `buildMessageItem` 在留言正文下方加回复展示区，并加 `maxlength=100` 输入行 + 「回复」按钮（Enter 可直接发送），全部 `createElement` + `textContent`；用户端 `#contactOverlay` 新增「我的留言」区（`loadMyMessages` / `renderMyMessages`），打开弹窗即拉取，同样只用 `textContent`。
+  - **版本**：`APP_VERSION → 20261112-vip18`（`src/version.js` 与 `public/app.js` 同值），`index.html` 三处 `?v=` 同步；`admin.html` 用另一个新值 `20261113-vip18`（admin 不参与 `APP_VERSION`）。
+  - **测试**：`test/messages.test.js` 由 43 → **67 项断言**（回复成功/超长/空/不存在、回复后自动已处理、未登录 401、`message:mine` 能查到自己的回复、查不到别的设备、字段白名单、缺 Token 被拒）；全量 **15 套全绿**。
 - **【安全加固 · 已上线】生产环境站长密码失效保护（版本仍为 `20261112-vip17`，仅后端、不动前端）**：
   - **问题**：`src/adminAuth.js` 原来写 `options.password || process.env.ADMIN_PASSWORD || DEFAULT_PASSWORD`，`||` 把空串当假值，因此 `ADMIN_PASSWORD=""`（注入失败/变量名写错/漏传值）会**静默降级**成仓库与 README 里都公开的 `boss2026`，且线上无任何告警。属于「失效保护缺失」，不是可用性优化。
   - **修法（方案 A：守卫放单入口，爆炸半径最小）**：

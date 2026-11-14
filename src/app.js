@@ -449,6 +449,25 @@ function createArenaServer(options = {}) {
     res.json({ ok: true, message: result.message, stats: messages.stats() });
   });
 
+  // 站长回复：写入后该条留言自动变「已处理」，额度随之释放。
+  // 400 = 内容问题（空 / 超长），404 = 留言不存在。审计只记 id 与长度，不记回复正文。
+  app.post('/api/admin/messages/reply', requireAdmin, (req, res) => {
+    const body = req.body || {};
+    const result = messages.reply(body.id, body.reply);
+    audit('admin_message_reply', {
+      ip: httpIp(req),
+      id: String(body.id || ''),
+      length: typeof body.reply === 'string' ? Array.from(body.reply).length : 0,
+      ok: result.ok,
+      reason: result.code || null,
+    });
+    if (!result.ok) {
+      res.status(result.code === 'NOT_FOUND' ? 404 : 400).json(result);
+      return;
+    }
+    res.json({ ok: true, message: result.message, record: result.record, stats: messages.stats() });
+  });
+
   // 单词发音音频：按单词命名、内容不变，给一年强缓存 + immutable，
   // 手机下过一次后不再回源（服务器带宽只有 4M，这一层很关键）。
   app.use(
@@ -1533,6 +1552,27 @@ function createArenaServer(options = {}) {
       });
 
       ack(result);
+    });
+
+    // 用户端「我的留言」：按设备 Token 的哈希反查自己的留言与站长回复。
+    // 只返回白名单字段，且只返回该设备自己的记录——deviceHash 由服务端计算，
+    // 客户端无法指定别人设备，也无法拿到他人留言。
+    on('message:mine', (payload, ack) => {
+      const deviceToken = normalizeDeviceToken(payload && payload.deviceToken);
+      if (!deviceToken) {
+        ack({ ok: false, error: '设备标识缺失，请刷新页面后重试', code: 'DEVICE_REQUIRED' });
+        return;
+      }
+      const deviceHash = crypto.createHash('sha256').update(deviceToken).digest('hex');
+      const mine = messages.listByDevice(deviceHash).map((item) => ({
+        id: item.id,
+        content: item.content,
+        reply: item.reply == null ? null : item.reply,
+        repliedAt: item.repliedAt == null ? null : item.repliedAt,
+        createdAt: item.createdAt,
+        status: item.status,
+      }));
+      ack({ ok: true, messages: mine });
     });
 
     on('room:create', (payload, ack) => {

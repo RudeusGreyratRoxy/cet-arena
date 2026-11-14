@@ -25,11 +25,11 @@
 - 发音：**本地 MP3**（`/audio/<word>.mp3`，微软神经网络语音 `en-US-JennyNeural`，24kHz 单声道 48kbps，平均 ~9KB/词，全量 ~26MB）。听音选词自动播放一次（失败时点喇叭兜底），英译中可点喇叭。**已彻底废弃 `speechSynthesis`**——HTTP 环境下 `secureContext=false`，多数手机浏览器直接禁用该 API。
 - 声音唤醒：进入准备页/对局后，页面顶部会出现「🔊 点击唤醒声音」；点一下播放 0.5 秒静音 MP3 换取移动端播放权限，成功后自动消失。
 - 音频强缓存：`/audio/` 走 `Cache-Control: public, max-age=31536000, immutable`，手机下过一次后一年内不再回源（服务器带宽仅 4M，这层很关键）。
-- 联系站长：首页右下角悬浮按钮，点开可写最多 50 字留言；按 `device_token` 做**动态配额**——同一设备**同时最多 5 条「未处理」**留言，站长标记已处理或删除后额度自动归还；服务器落 `data/messages.json`；后台「留言管理」标签页可按时间倒序查看、标记已处理、删除。
+- 联系站长：首页右下角悬浮按钮，点开可写最多 50 字留言；按 `device_token` 做**动态配额**——同一设备**同时最多 5 条「未处理」**留言，站长标记已处理或删除后额度自动归还；服务器落 `data/messages.json`；后台「留言管理」标签页可按时间倒序查看、标记已处理、删除。**站长可对单条留言写回复（最多 100 字）**，回复后该条自动转为「已处理」；用户在同一个弹窗的「我的留言」区能看到自己的留言与站长回复（只按设备 Token 的哈希反查，看不到他人留言）。
 - 复盘：展示单词拼写、词性、完整释义、对错/未作答；答错后纠正的题仍标红；竞速另含双方进度、用时、错误数
 - 错词本（**VIP 专属**）：答错的单词自动存入浏览器 localStorage；单人「错词挑战」只考错词，**连续答对 3 次**才移出；免费用户入口显示「VIP 专属」，服务端 `solo:start` 同步拦截
 - 网络：顶部实时显示 Ping；>200ms 黄色、>500ms 红色；断线自动快速重连
-- 站长后台：访问 `/admin` 输入站长密码进入。分「卡密管理」与「留言管理」两个标签页，留言标签带待处理数量红点。卡密表展示类型、状态、绑定 IP、绑定设备（Token 前 8 位）与绑定时间，支持搜索；可一键批量生成新码、对已绑定卡密一键解绑重置；留言按时间倒序展示，可标记已处理 / 删除。适配手机浏览器。所有管理接口在服务端强制校验站长密码，未登录一律 401。
+- 站长后台：访问 `/admin` 输入站长密码进入。分「卡密管理」与「留言管理」两个标签页，留言标签带待处理数量红点。卡密表展示类型、状态、绑定 IP、绑定设备（Token 前 8 位）与绑定时间，支持搜索；可一键批量生成新码、对已绑定卡密一键解绑重置；留言按时间倒序展示，可标记已处理 / 删除、**写/修改站长回复**。适配手机浏览器。所有管理接口在服务端强制校验站长密码，未登录一律 401。
 - 部署：单实例内存房间，支持本地运行、Cloudflare Quick Tunnel 与腾讯云 + PM2 公网部署
 
 ## 1. 快速开始
@@ -545,7 +545,8 @@ cet-arena/
 - **预加载策略**：题目到达时立刻 `preload="auto"` 拉取该词音频，200ms 后再播放，通常首帧已在本地。**不做整局预取**——`中译英`/`听音选词` 的单词就是答案，提前下发会泄露答案，只能在题目到达后取。
 - **自动播放兜底**：`audio.play()` 返回的 Promise 被拒（自动播放策略）时不弹错误，只给 🔊 按钮加 `is-nudge` 动画；`play()` 成功才把 `audioUnlocked` 置真。
 - **声音唤醒引导**：微信内置 / UC / 部分 Android 浏览器在用户手势前禁止播放。准备页/对局页顶部显示「🔊 点击唤醒声音」，点击后在同步手势调用链里播放 0.5 秒静音 MP3；`play()` resolve 即解锁并隐藏按钮，reject 则保留按钮提示重试。
-- **留言板存储与动态配额**：`data/messages.json`（已 gitignore）保存 `{ id, content, deviceHash, devicePrefix, ip, createdAt, status }`；内容去掉控制字符并压缩空白，按 **码点** 计算长度，超过 50 字拒绝。配额按 `device_token` 的 SHA-256 **实时统计「未处理」条数**（`status !== 'handled'`），同一设备**同时最多 5 条未处理**留言；站长标记已处理或删除后，未处理数下降，额度自动归还。另加 5 秒冷却防连点。只落设备 Token 前 8 位与哈希，不保存完整凭据。公开入口走 socket `message:create`（无需激活码），后台读取/处理/删除走受密码保护的 `/api/admin/messages*`。
+- **留言板存储与动态配额**：`data/messages.json`（已 gitignore）保存 `{ id, content, deviceHash, devicePrefix, ip, createdAt, status, reply, repliedAt }`；内容去掉控制字符并压缩空白，按 **码点** 计算长度，超过 50 字拒绝。配额按 `device_token` 的 SHA-256 **实时统计「未处理」条数**（`status !== 'handled'`），同一设备**同时最多 5 条未处理**留言；站长标记已处理或删除后，未处理数下降，额度自动归还。另加 5 秒冷却防连点。只落设备 Token 前 8 位与哈希，不保存完整凭据。公开入口走 socket `message:create`（无需激活码），后台读取/处理/删除/回复走受密码保护的 `/api/admin/messages*`。
+- **站长回复（vip18）**：`POST /api/admin/messages/reply`（`requireAdmin`，body `{id, reply}`）调用 `messages.reply()`；回复内容同样走 `cleanContent`，按码点 **≤100 字**，空回复与超长分别返回 `EMPTY_REPLY` / `REPLY_TOO_LONG`（HTTP 400），id 不存在返回 `NOT_FOUND`（HTTP 404）。**回复即处理**：写入 `reply` + `repliedAt` 的同时把 `status` 置为 `handled` 并补 `handledAt`，因此该设备的待处理额度立即释放。用户端通过 socket `message:mine`（payload `{deviceToken}`）拉自己的留言：服务端自己算 `sha256(deviceToken)` 再 `listByDevice()`，**客户端无法指定他人设备**，且只回 `{id, content, reply, repliedAt, createdAt, status}` 白名单字段。三处渲染（后台列表、后台回复区、用户端「我的留言」）全部 `createElement` + `textContent`，不拼 `innerHTML`。
 - **重连**：创建/加入时返回随机 `sessionId`，刷新后 `room:resume` 恢复；竞速模式还会补发个人当前题、进度与惩罚截止时间。
 - **房间回收**：双方都离线时不再死等 30 分钟——对局已结束的房间**立即删除**；进行中的对局保留 `emptyRoomGraceMs`（默认 **60 秒**，移动端切后台/弱网重连留足时间）供「刷新重连」，期间有人通过 `room:resume` 回来就取消回收；60 秒兜底扫描仅作为最后保险。`deleteRoom` 会一并清理子定时器、`sessions`、`socketPlayers`、`socket.data.roomCode` 并 `io.socketsLeave(room.code)`，不留幽灵连接。
 - **激活码存储**：`data/vip_codes.json` 只存放种子卡密（入库、只读，`type` 为 `unlimited` 或 `once`）；后台批量生成/自定义生成的卡密写入 `data/vip_codes.custom.json`（已 gitignore），启动时合并进内存，避免线上生成卡密导致 `git pull` 冲突；运行状态（`used` / `boundDevice` / `boundIp` / `lastIp` / `usedAt`）写入 `data/vip_codes.state.json`（已 gitignore），先写临时文件再 rename，保证原子性，也避免 `git pull` 与线上状态冲突。
@@ -684,6 +685,11 @@ cet-arena/
 - [x] 后台可标记已处理 / 恢复待处理 / 删除，标签页红点数字同步
 - [x] 未登录访问 `/api/admin/messages` 返回 401
 - [x] 留言接口不需要激活码（没码的用户也能反馈问题）
+- [x] 站长可对单条留言写回复（最多 100 字），回复后该条自动变为「已处理」并释放额度
+- [x] 回复超 100 字返回 400、目标留言不存在返回 404、未登录调回复接口返回 401
+- [x] 用户端弹窗「我的留言」能显示本设备留言与「站长回复」，打开弹窗即拉取
+- [x] `message:mine` 只返回本设备记录（换设备 Token 查不到他人留言），且只回白名单字段
+- [x] 留言正文、站长回复全部用 `textContent` 渲染，无 `innerHTML` 拼接
 
 ### 站长后台测试清单
 
