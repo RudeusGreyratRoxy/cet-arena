@@ -96,15 +96,15 @@
 
 ## 线上版本
 
-- 服务版本：`20261112-vip18`，`GET /healthz` 实测 `{"ok":true,"rooms":0,"players":0,"words":2868,"version":"20261112-vip18"}`；PM2 进程 online、**restarts 27**、2026-11-14 11:22 因留言回复功能部署重启（此前 26 是 11-13 17:25 的安全加固）
-- 服务器代码提交：`bc775d7 feat: 留言回复功能，站长可回复且用户端可见（vip18）`
-- 服务器 HEAD：与本地一致（该提交含 `src/` 与 `public/`，**必须重启才生效，已显式回注环境变量重启**；只改 README/HANDOFF 的文档提交则 `git pull` 即可，不需要 `pm2 restart`）
-- 前端版本号：本地 `20261112-vip18` / 线上 `20261112-vip18`（已同步）；`index.html` 三处 `?v=` 为 `20261112-vip18`，`admin.html` 两处 `?v=` 为 `20261113-vip18`（admin 不参与 `APP_VERSION`）
+- 服务版本：`20261112-vip18`，`GET /healthz` 实测 `{"ok":true,"rooms":0,"players":0,"words":2868,"version":"20261112-vip18"}`；PM2 进程 online、**restarts 28**、2026-11-17 20:41 因作废 9 条种子码部署重启（此前 27 是 11-14 11:22 的留言回复上线）
+- 服务器代码提交：`b321979 作废公开泄露的9条种子码（含已用2条），种子codes清空`
+- 服务器 HEAD：与本地一致（该提交改 `data/vip_codes.json`，种子只在启动时加载，**必须重启才生效，已显式回注环境变量重启**；只改 README/HANDOFF 的文档提交则 `git pull` 即可，不需要 `pm2 restart`）
+- 前端版本号：本地 `20261112-vip18` / 线上 `20261112-vip18`（已同步）；`index.html` 三处 `?v=` 为 `20261112-vip18`，`admin.html` 两处 `?v=` 为 `20261114-vip18`（admin 不参与 `APP_VERSION`）
 - 环境变量：重启前后 `ADMIN_PASSWORD` len=11、`VIP_UNLIMITED_CODES` len=27，长度一致
 - 地址：<http://1.15.152.160:3000>　后台：<http://1.15.152.160:3000/admin>
 - 音频：`public/audio/` 2869 个文件（26.38MB），`/audio/<word>.mp3?v=2` 走 immutable 强缓存
 - 留言：`data/messages.json`，验收数据已清理；最新状态以 `/admin` →「留言管理」为准
-- 卡密状态：种子 `data/vip_codes.json` 9 条 `once` + 环境变量 `VIP_UNLIMITED_CODES` 注入 2 条 `unlimited`；`data/vip_codes.state.json` 现存 **2 条历史绑定记录，均处于封禁态**（`revoked` + `revokedDevices` + `rebindAllowedAt`，来自 11-12 / 11-13 的封禁验收），当前没有在用绑定；运行时自定义码落 `data/vip_codes.custom.json`
+- 卡密状态：种子 `data/vip_codes.json` 的 `codes` **已清空为 `{}`**（原 9 条 `once` 因公开泄露作废并移除，实测 9/9 返回 `INVALID`）+ 环境变量 `VIP_UNLIMITED_CODES` 注入 2 条 `unlimited`（实测均 `OK`）；`data/vip_codes.state.json` 现存 **4 条记录、`revoked` 0 条**（含 2 条已作废种子码的孤儿绑定记录，无害）；运行时自定义码落 `data/vip_codes.custom.json`
 - 进程环境：`ADMIN_PASSWORD` 与 `VIP_UNLIMITED_CODES` 均已注入并由 `pm2 save` 持久化（复核：`PID=$(pm2 pid cet-arena)` 后 `tr '\0' '\n' < /proc/$PID/environ | grep -E '^(ADMIN_PASSWORD|VIP_UNLIMITED_CODES)='`，只输出键名、不输出值）
 
 ## 待办事项
