@@ -75,6 +75,43 @@ function devicePrefix(token) {
   return String(token).slice(0, 8);
 }
 
+/** 设备 Token 哈希前缀。带前缀是为了把「哈希」与「老明文记录」区分开。 */
+const HASH_PREFIX = 'sha256:';
+
+/**
+ * 设备 Token 哈希：`sha256:<64hex>`。
+ * 与 `src/messages.js` 的 `deviceHash` 用同一算法（sha256 + hex），
+ * 区别只在多了 `sha256:` 前缀，便于兼容期识别存储格式。
+ */
+function hashDevice(token) {
+  const raw = String(token == null ? '' : token).trim();
+  return HASH_PREFIX + crypto.createHash('sha256').update(raw).digest('hex');
+}
+
+function isHashedDevice(value) {
+  return typeof value === 'string' && value.startsWith(HASH_PREFIX);
+}
+
+/**
+ * 兼容比较（方案 A 的核心）：
+ * - 新记录 `boundDevice` 是 `sha256:<hex>` → 对入参现算哈希后严格比；
+ * - 老记录仍是明文 token → 按明文比。
+ * 这样「先上代码、后迁数据」也能安全运行，老用户不会因为格式切换掉 VIP。
+ */
+function deviceMatches(stored, token) {
+  if (!stored) return false;
+  const raw = String(token == null ? '' : token).trim();
+  if (!raw) return false;
+  if (isHashedDevice(stored)) return stored === hashDevice(raw);
+  return String(stored) === raw;
+}
+
+/** 黑名单数组里任一命中即算被拉黑（同样兼容老明文条目）。 */
+function revokedMatches(list, token) {
+  if (!Array.isArray(list)) return false;
+  return list.some((entry) => deviceMatches(entry, token));
+}
+
 /** 兼容旧数据：任何非 unlimited 的类型都视为普通单人码。 */
 function normalizeType(rawType) {
   return rawType === 'unlimited' || rawType === 'super_admin' ? 'unlimited' : 'once';
@@ -148,8 +185,10 @@ function createVipStore(options = {}) {
       kind: type,
       label: def.label || '',
       status: type === 'unlimited' ? 'unlimited' : (record && record.status) || 'available',
-      // 绑定主体是设备 Token；只回传前 8 位，够后台人工核对，又不把完整凭据散出去。
-      boundDevicePrefix: record ? devicePrefix(record.boundDevice) : null,
+      // 绑定主体是设备 Token（哈希存储）；只回传前 8 位，够后台人工核对，又不把完整凭据散出去。
+      boundDevicePrefix: record
+        ? record.boundDevicePrefix || (isHashedDevice(record.boundDevice) ? null : devicePrefix(record.boundDevice))
+        : null,
       boundIp: record ? record.boundIp || null : null,
       lastIp: record ? record.lastIp || null : null,
       usedAt: record ? record.usedAt || null : null,
@@ -181,7 +220,7 @@ function createVipStore(options = {}) {
       return (
         record &&
         record.status === 'used' &&
-        record.boundDevice === device &&
+        deviceMatches(record.boundDevice, device) &&
         has(key)
       );
     });
@@ -230,11 +269,7 @@ function createVipStore(options = {}) {
       const record = state[code];
 
       // 被站长解绑过的设备永久失效（跨多轮解绑依然有效）。
-      if (
-        record &&
-        Array.isArray(record.revokedDevices) &&
-        record.revokedDevices.includes(device)
-      ) {
+      if (revokedMatches(record && record.revokedDevices, device)) {
         return {
           ok: false,
           code: 'REVOKED',
@@ -253,7 +288,9 @@ function createVipStore(options = {}) {
         }
         state[code] = {
           status: 'used',
-          boundDevice: device,
+          boundDevice: hashDevice(device),
+          // 保留前 8 位供后台核对；哈希本身无法反推原值。
+          boundDevicePrefix: devicePrefix(device),
           boundIp: ip || null,
           lastIp: ip || null,
           usedAt: now().toISOString(),
@@ -278,13 +315,15 @@ function createVipStore(options = {}) {
           return { ok: false, code: 'BOUND', message: '该卡密已绑定其他设备' };
         }
         record.status = 'used';
-        record.boundDevice = device;
+        record.boundDevice = hashDevice(device);
+        record.boundDevicePrefix = devicePrefix(device);
         record.lastIp = ip || record.boundIp || null;
         writeJsonAtomic(statePath, state);
         return { ok: true, kind: 'once', reused: true, migrated: true, message: '验证成功' };
       }
 
-      if (record.boundDevice !== device) {
+      // 兼容老明文记录：哈希记录走严格哈希比对，明文记录按明文比对。
+      if (!deviceMatches(record.boundDevice, device)) {
         return { ok: false, code: 'BOUND', message: '该卡密已绑定其他设备' };
       }
 
@@ -342,13 +381,28 @@ function createVipStore(options = {}) {
     const revokedDevices = Array.isArray(current.revokedDevices)
       ? current.revokedDevices.slice()
       : [];
-    if (current.boundDevice && !revokedDevices.includes(current.boundDevice)) {
-      revokedDevices.push(current.boundDevice);
+    // 当前绑定值可能是新哈希，也可能是老明文：统一成哈希后再判断是否已在黑名单，
+    // 避免把已哈希的值二次哈希、也避免与老明文条目重复。
+    const currentHash = current.boundDevice
+      ? (isHashedDevice(current.boundDevice) ? current.boundDevice : hashDevice(current.boundDevice))
+      : null;
+    if (
+      currentHash &&
+      !revokedDevices.includes(currentHash) &&
+      !revokedDevices.includes(current.boundDevice)
+    ) {
+      revokedDevices.push(currentHash);
     }
+
+    // 记录被撤销前的绑定值与展示前缀，供路由层踢线/审计使用（踢线不依赖明文）。
+    const previousDevice = current.boundDevice || null;
+    const previousDevicePrefix = current.boundDevicePrefix
+      || (previousDevice && !isHashedDevice(previousDevice) ? devicePrefix(previousDevice) : null);
 
     state[code] = {
       status: 'revoked',
       boundDevice: null,
+      boundDevicePrefix: null,
       // 解绑后不再对外展示绑定 IP（保留 lastIp 作风控参考）
       boundIp: null,
       lastIp: current.lastIp || current.boundIp || null,
@@ -364,7 +418,8 @@ function createVipStore(options = {}) {
       message: '已封禁：所有设备立即失效，需在后台点「允许换机」才能给新设备使用',
       record: describe(code),
       // 仅用于服务端在线踢人，路由层不会把它返回给前端。
-      previousDevice: current.boundDevice || null,
+      previousDevice,
+      previousDevicePrefix,
     };
   }
 
@@ -388,6 +443,7 @@ function createVipStore(options = {}) {
     state[code] = {
       status: 'available',
       boundDevice: null,
+      boundDevicePrefix: null,
       boundIp: null,
       lastIp: record.lastIp || null,
       usedAt: record.usedAt || null,
@@ -423,8 +479,11 @@ function createVipStore(options = {}) {
       };
     }
 
-    const previousDevice =
-      state[code] && state[code].boundDevice ? state[code].boundDevice : null;
+    const removedRecord = state[code];
+    const previousDevice = removedRecord && removedRecord.boundDevice ? removedRecord.boundDevice : null;
+    const previousDevicePrefix = removedRecord && removedRecord.boundDevicePrefix
+      ? removedRecord.boundDevicePrefix
+      : (previousDevice && !isHashedDevice(previousDevice) ? devicePrefix(previousDevice) : null);
     delete custom.codes[code];
     delete codes[code];
     const hadState = Boolean(state[code]);
@@ -437,8 +496,9 @@ function createVipStore(options = {}) {
       message: `已彻底删除卡密「${code}」，之后无法再激活`,
       code,
       hadState,
-      // 仅用于服务端踢线
+      // 仅用于服务端踢线（可能是哈希，也可能是老明文，由 kickDevice 兼容两种）
       previousDevice,
+      previousDevicePrefix,
     };
   }
 
@@ -553,4 +613,13 @@ function createVipStore(options = {}) {
   };
 }
 
-module.exports = { createVipStore, normalizeCode, normalizeType, normalizeDeviceToken };
+module.exports = {
+  createVipStore,
+  normalizeCode,
+  normalizeType,
+  normalizeDeviceToken,
+  hashDevice,
+  deviceMatches,
+  revokedMatches,
+  isHashedDevice,
+};

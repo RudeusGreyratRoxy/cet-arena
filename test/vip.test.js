@@ -12,7 +12,7 @@ const assert = require('assert/strict');
 const fs = require('fs');
 const path = require('path');
 const { io } = require('socket.io-client');
-const { createVipStore, normalizeDeviceToken } = require('../src/vipCodes');
+const { createVipStore, normalizeDeviceToken, hashDevice } = require('../src/vipCodes');
 const { createArenaServer } = require('../src/app');
 const { APP_VERSION } = require('../src/version');
 
@@ -118,7 +118,7 @@ async function main() {
     const moved = s3.verify('VIP888', '10.9.9.9', DEVICE_A);
     ok('同设备换 IP 仍通过（宿舍 Wi-Fi ↔ 热点）', moved.ok === true && moved.reused === true);
     const record = JSON.parse(fs.readFileSync(statePath, 'utf8')).VIP888;
-    ok('绑定主体是设备 Token', record.boundDevice === DEVICE_A);
+    ok('绑定主体是设备 Token（哈希存储）', record.boundDevice === hashDevice(DEVICE_A));
     ok('IP 仅作风控记录（保留首次绑定 IP）', record.boundIp === '10.0.0.1');
     ok('记录最近一次来源 IP', record.lastIp === '10.9.9.9');
 
@@ -146,7 +146,24 @@ async function main() {
     ok('旧记录换 IP 仍被拒', s6.verify('VIP666', '10.4.0.9', DEVICE_A).ok === false);
     const migrated = s6.verify('VIP666', '10.4.0.1', DEVICE_A);
     ok('旧记录同 IP 首次带 Token 时可迁移通过', migrated.ok === true && migrated.migrated === true);
-    ok('迁移后已落库设备 Token', JSON.parse(fs.readFileSync(statePath, 'utf8')).VIP666.boundDevice === DEVICE_A);
+    const migratedState = JSON.parse(fs.readFileSync(statePath, 'utf8')).VIP666;
+    ok('迁移后已落库设备 Token 哈希', migratedState.boundDevice === hashDevice(DEVICE_A));
+    ok('迁移后同时写入前 8 位前缀', migratedState.boundDevicePrefix === DEVICE_A.slice(0, 8));
+
+    console.log('=== 8.1 兼容老明文 boundDevice（方案 A 核心保障）===');
+    resetState();
+    fs.writeFileSync(
+      statePath,
+      JSON.stringify({ VIP666: { status: 'used', boundDevice: DEVICE_A, boundIp: '10.4.0.1' } })
+    );
+    const s6b = newStore();
+    const legacySame = s6b.verify('VIP666', '10.4.1.1', DEVICE_A);
+    ok('老明文记录：同设备仍可验证通过', legacySame.ok === true && legacySame.reused === true);
+    ok('老明文记录：换设备仍被拒', s6b.verify('VIP666', '10.4.1.2', DEVICE_B).code === 'BOUND');
+    ok(
+      '老明文记录：statusByDevice 也能认出来',
+      s6b.statusByDevice(DEVICE_A, '').vip === true
+    );
 
     console.log('=== 9. Token 规范化 ===');
     ok('正常 Token 保留', normalizeDeviceToken('  ' + DEVICE_A + '  ') === DEVICE_A);
@@ -199,8 +216,9 @@ async function main() {
     ok('解绑成功', resetRes.ok === true);
     const stateAfterReset = JSON.parse(fs.readFileSync(statePath, 'utf8'));
     ok('状态改为 revoked', stateAfterReset.VIP888.status === 'revoked');
-    ok('记录被撤销的设备', stateAfterReset.VIP888.revokedDevices.includes(DEVICE_A));
-    ok('只返回设备给服务端踢线用', resetRes.previousDevice === DEVICE_A);
+    ok('记录被撤销的设备（哈希）', stateAfterReset.VIP888.revokedDevices.includes(hashDevice(DEVICE_A)));
+    ok('只返回设备给服务端踢线用', resetRes.previousDevice === hashDevice(DEVICE_A));
+    ok('踢线用的前缀一并返回', resetRes.previousDevicePrefix === DEVICE_A.slice(0, 8));
 
     const oldAgain = s9.verify('VIP888', '10.6.0.3', DEVICE_A);
     ok('原设备再次验证被拒', oldAgain.ok === false && oldAgain.code === 'REVOKED');
@@ -219,12 +237,12 @@ async function main() {
     ok('允许换机成功', allow.ok === true);
     const stAllow = JSON.parse(fs.readFileSync(statePath, 'utf8'));
     ok('状态回到 available', stAllow.VIP888.status === 'available');
-    ok('原设备仍在黑名单', stAllow.VIP888.revokedDevices.includes(DEVICE_A));
+    ok('原设备仍在黑名单', stAllow.VIP888.revokedDevices.includes(hashDevice(DEVICE_A)));
     ok('封禁设备数可查询', s9.describe('VIP888').revokedDeviceCount === 1);
 
     const rebind = s9.verify('VIP888', '10.6.0.6', DEVICE_B);
     ok('允许换机后新设备可激活', rebind.ok === true);
-    ok('已绑定到新设备', JSON.parse(fs.readFileSync(statePath, 'utf8')).VIP888.boundDevice === DEVICE_B);
+    ok('已绑定到新设备（哈希）', JSON.parse(fs.readFileSync(statePath, 'utf8')).VIP888.boundDevice === hashDevice(DEVICE_B));
     const oldStillBlocked = s9.verify('VIP888', '10.6.0.7', DEVICE_A);
     ok('换机后原设备仍被拒（永久拉黑）', oldStillBlocked.ok === false && oldStillBlocked.code === 'REVOKED');
     ok('重复允许换机会被拒', s9.allowRebind('VIP888').code === 'NOT_REVOKED');

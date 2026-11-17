@@ -3,18 +3,18 @@
 /**
  * 设备 Token 绑定行为的「明文基线」回归测试。
  *
- * 目的：把**当前**实现（boundDevice / revokedDevices 里存原始 token 明文、直接字符串比较）
- * 固化下来。将来若把设备 Token 改成哈希存储，本套件应当成批失败——这正是我们要的信号，
- * 届时按新语义改写这里的断言即可，避免「改了存储格式但没人发现旧数据全被判 BOUND」。
+ * 目的：锁住**当前**实现（`boundDevice` / `revokedDevices` 存 `sha256:<64hex>`，
+ * 同时用 `boundDevicePrefix` 保留前 8 位供后台核对；比较走 `deviceMatches` 兼容
+ * 老明文记录）。这样将来若再改存储格式，本套件会成批失败——这是有意的绊线。
  *
  * 覆盖：
- *   a) 首次绑定后 state 里 boundDevice 等于传入 token（明文，不是 64 位哈希）
+ *   a) 首次绑定后 state 里 boundDevice 是 sha256:<64hex>、prefix 是原 token 前 8 位
  *   b) 同设备再次 verify 放行（不是 BOUND）
  *   c) 换设备 verify 被拒（BOUND）
  *   d) reset 封禁后原设备 REVOKED，且不影响其他卡密
- *   e) allowRebind 后新设备可绑定，旧设备进 revokedDevices
+ *   e) allowRebind 后新设备可绑定，旧设备以哈希进 revokedDevices
  *   f) 被拉黑设备再次 verify 仍 REVOKED
- *   g) reset 返回 previousDevice（供在线踢线），未绑定码不返回
+ *   g) reset 返回 previousDevice（哈希，供在线踢线）+ 审计用前缀，未绑定码不返回
  *
  * 全部使用假卡密与假 token，state/seed 都写在系统临时目录，绝不读写项目 data/。
  */
@@ -23,7 +23,7 @@ const assert = require('assert/strict');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { createVipStore } = require('../src/vipCodes');
+const { createVipStore, hashDevice, deviceMatches } = require('../src/vipCodes');
 
 // 假卡密：三个 once 码，互不影响
 const CODE_1 = 'TOKENCODE1';
@@ -71,18 +71,21 @@ function tokenMask(token) {
 function main() {
   const store = createVipStore({ seedPath, statePath });
 
-  console.log('=== a) 首次绑定：boundDevice 存的是原始 token（明文基线） ===');
+  console.log('=== a) 首次绑定：boundDevice 存 sha256 哈希 + prefix ===');
   const first = store.verify(CODE_1, '203.0.113.10', DEVICE_A);
   ok('首次验证成功', first.ok === true, JSON.stringify(first));
   ok('返回 firstUse 标记', first.firstUse === true);
   const bound = readState()[CODE_1].boundDevice;
-  ok('state 里 boundDevice 等于传入 token（明文）', bound === DEVICE_A, tokenMask(bound));
-  ok('boundDevice 长度为 32（与 token 同长）', typeof bound === 'string' && bound.length === DEVICE_A.length);
+  ok('state 里 boundDevice 是 sha256:<64hex>', /^sha256:[0-9a-f]{64}$/.test(String(bound)), tokenMask(bound));
+  ok('boundDevice 总长度为 71（sha256: + 64）', typeof bound === 'string' && bound.length === 71);
+  ok('boundDevice 等于 hashDevice(原 token)', bound === hashDevice(DEVICE_A));
+  ok('boundDevice 不等于原 token（已哈希）', bound !== DEVICE_A);
   ok(
-    'boundDevice 不是 64 位 sha256（锁住当前非哈希实现）',
-    !/^[0-9a-f]{64}$/.test(String(bound)),
-    String(bound).length
+    'boundDevicePrefix 等于原 token 前 8 位',
+    readState()[CODE_1].boundDevicePrefix === DEVICE_A.slice(0, 8)
   );
+  ok('旧明文 token 仍能被 deviceMatches 命中（兼容分支）', deviceMatches(bound, DEVICE_A) === true);
+  ok('别的设备不会被误判命中', deviceMatches(bound, DEVICE_B) === false);
 
   console.log('=== b) 同设备再次 verify：放行，不判 BOUND ===');
   const again = store.verify(CODE_1, '198.51.100.7', DEVICE_A);
@@ -93,7 +96,7 @@ function main() {
   console.log('=== c) 不同设备 verify：BOUND ===');
   const other = store.verify(CODE_1, '198.51.100.7', DEVICE_B);
   ok('换设备被拒', other.ok === false && other.code === 'BOUND', JSON.stringify(other));
-  ok('绑定关系未被换设备改写', readState()[CODE_1].boundDevice === DEVICE_A);
+  ok('绑定关系未被换设备改写', readState()[CODE_1].boundDevice === hashDevice(DEVICE_A));
 
   console.log('=== d) reset 封禁：原设备 REVOKED，其他码不受影响 ===');
   // 先让第二张码正常绑定，用来验证「不受影响」
@@ -118,14 +121,18 @@ function main() {
 
   const afterRebind = readState()[CODE_1];
   ok(
-    '旧设备已进入 revokedDevices（存原始 token）',
-    Array.isArray(afterRebind.revokedDevices) && afterRebind.revokedDevices.includes(DEVICE_A),
+    '旧设备已进入 revokedDevices（存哈希）',
+    Array.isArray(afterRebind.revokedDevices) && afterRebind.revokedDevices.includes(hashDevice(DEVICE_A)),
     JSON.stringify((afterRebind.revokedDevices || []).map(tokenMask))
+  );
+  ok(
+    '黑名单条目全部是 sha256: 前缀',
+    (afterRebind.revokedDevices || []).every((v) => String(v).startsWith('sha256:'))
   );
 
   const newDevice = store.verify(CODE_1, '203.0.113.30', DEVICE_B);
   ok('新设备可以重新绑定', newDevice.ok === true, JSON.stringify(newDevice));
-  ok('state 里绑定的是新设备 token', readState()[CODE_1].boundDevice === DEVICE_B);
+  ok('state 里绑定的是新设备哈希', readState()[CODE_1].boundDevice === hashDevice(DEVICE_B));
 
   console.log('=== f) revokedDevices 拦截：被拉黑设备仍 REVOKED ===');
   const blacklisted = store.verify(CODE_1, '203.0.113.10', DEVICE_A);
@@ -134,15 +141,16 @@ function main() {
 
   console.log('=== g) reset 返回 previousDevice（踢线用） ===');
   const reset2 = store.reset(CODE_2);
-  ok('reset 返回 previousDevice', reset2.previousDevice === DEVICE_C, tokenMask(reset2.previousDevice));
-  ok('previousDevice 是原始 token 而非 null', reset2.previousDevice !== null && typeof reset2.previousDevice === 'string');
+  ok('reset 返回 previousDevice', reset2.previousDevice === hashDevice(DEVICE_C), tokenMask(reset2.previousDevice));
+  ok('previousDevice 是哈希而非 null', reset2.previousDevice !== null && String(reset2.previousDevice).startsWith('sha256:'));
+  ok('reset 同时返回用于审计的前缀', reset2.previousDevicePrefix === DEVICE_C.slice(0, 8));
 
   const unbound = store.reset(CODE_3);
   ok('未使用的码不能封禁', unbound.ok === false && unbound.code === 'NOT_BOUND', JSON.stringify(unbound));
   ok('未绑定码不返回 previousDevice', !unbound.previousDevice);
 
   console.log('');
-  console.log(`设备 Token 明文基线测试全部通过（${passed} 项断言）。`);
+  console.log(`设备 Token 哈希基线测试全部通过（${passed} 项断言）。`);
 }
 
 try {

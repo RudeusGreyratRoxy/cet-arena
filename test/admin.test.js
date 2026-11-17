@@ -10,7 +10,7 @@
 const assert = require('assert/strict');
 const fs = require('fs');
 const path = require('path');
-const { createVipStore } = require('../src/vipCodes');
+const { createVipStore, hashDevice } = require('../src/vipCodes');
 const { createArenaServer } = require('../src/app');
 const { io } = require('socket.io-client');
 const { APP_VERSION } = require('../src/version');
@@ -214,7 +214,7 @@ async function main() {
 
     console.log('=== 5. 解绑 / 重置 ===');
     arena.vip.verify('VIP888', '10.9.9.1', DEVICE_X);
-    ok('VIP888 已绑定设备与 IP', readState().VIP888.boundDevice === DEVICE_X && readState().VIP888.boundIp === '10.9.9.1');
+    ok('VIP888 已绑定设备（哈希）与 IP', readState().VIP888.boundDevice === hashDevice(DEVICE_X) && readState().VIP888.boundIp === '10.9.9.1');
 
     const beforeReset = await http('GET', '/api/admin/state');
     const boundItem = beforeReset.data.codes.find((item) => item.code === 'VIP888');
@@ -231,7 +231,7 @@ async function main() {
       'state 文件保留 revoked 记录且记住被撤销设备',
       readState().VIP888 &&
         readState().VIP888.status === 'revoked' &&
-        readState().VIP888.revokedDevices.includes(DEVICE_X)
+        readState().VIP888.revokedDevices.includes(hashDevice(DEVICE_X))
     );
     ok('统计已绑定数减少', reset.data.stats.used === 1); // fresh 仍在
 
@@ -245,7 +245,7 @@ async function main() {
     );
     const afterAllow = arena.vip.verify('VIP888', '10.9.9.2', DEVICE_Y);
     ok('允许换机后新设备可激活', afterAllow.ok === true);
-    ok('重新激活后绑定到新设备', readState().VIP888.boundDevice === DEVICE_Y);
+    ok('重新激活后绑定到新设备（哈希）', readState().VIP888.boundDevice === hashDevice(DEVICE_Y));
 
     const badReset = await http('POST', '/api/admin/codes/reset', { body: { code: 'NOSUCH' } });
     ok('解绑不存在的卡密被拒', badReset.status === 400 && badReset.data.code === 'INVALID');

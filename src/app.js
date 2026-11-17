@@ -7,7 +7,7 @@ const express = require('express');
 const compression = require('compression');
 const { Server } = require('socket.io');
 const { loadWords, buildQuestions, buildQuestion } = require('./wordBank');
-const { createVipStore, normalizeDeviceToken } = require('./vipCodes');
+const { createVipStore, normalizeDeviceToken, deviceMatches } = require('./vipCodes');
 const { createAdminAuth } = require('./adminAuth');
 const { createMessageStore, MAX_CONTENT } = require('./messages');
 const { createAnnouncementStore } = require('./announcement');
@@ -258,11 +258,13 @@ function createArenaServer(options = {}) {
   });
 
   // 在线踢人：把该设备所有在线连接降级为普通用户（不断线、不打断当前对局）。
-  function kickDevice(deviceToken, message) {
-    if (!deviceToken) return 0;
+  // deviceRef 可能是 `sha256:<hex>`（新记录）或明文 token（老记录），
+  // 统一交给 deviceMatches 兼容两种格式——不要在这里自己算哈希，否则老记录踢不掉。
+  function kickDevice(deviceRef, message) {
+    if (!deviceRef) return 0;
     let kicked = 0;
     for (const client of io.sockets.sockets.values()) {
-      if (client.data && client.data.deviceToken === deviceToken) {
+      if (client.data && deviceMatches(deviceRef, client.data.deviceToken)) {
         client.data.vip = false;
         client.data.vipCode = null;
         client.emit('vip:revoked', { message });
@@ -294,7 +296,8 @@ function createArenaServer(options = {}) {
       audit('vip_revoked', {
         ip: httpIp(req),
         code: String(body.code || '').toUpperCase(),
-        device: String(result.previousDevice).slice(0, 8),
+        // 只记前 8 位前缀；哈希无法反推原值，明文字段也不再落库。
+        device: result.previousDevicePrefix || String(result.previousDevice).slice(0, 8),
         kicked,
       });
     }
