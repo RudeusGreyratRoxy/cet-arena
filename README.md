@@ -187,7 +187,7 @@ $env:CI="true"
 npm test
 ```
 
-该命令会运行十五套测试：
+该命令会运行十六套测试：
 
 - `test/wrongbook.test.js`：错词本纯逻辑（入库、去重、连对、清零、掌握移除、脏数据容错）。
 - `test/dom-contract.test.js`：`app.js` 引用的 DOM id 全部存在、脚本加载顺序正确。
@@ -199,8 +199,9 @@ npm test
 - `test/mixed.test.js`：压力生成 3 万+ 道题，校验英译中/中译英/听音选词题干与选项零错配。
 - `test/admin-ui.test.js`：假 DOM 真跑 `admin.js`，校验卡密列表渲染（拉黑数在 available/used/revoked 三种状态都必须显示）。
 - `test/env-guard.test.js`：站长密码失效保护——`NODE_ENV=production` 且 `ADMIN_PASSWORD` 缺失或 trim 后为空时，子进程跑 `server.js` 必须以退出码 1 结束并在 stderr 给出明确提示；同时覆盖「完全未设置才回落本地默认值」「空白值抛错」两条解析规则。
+- `test/device-token.test.js`：设备 Token 绑定的**明文行为基线**——首次绑定后 state 里 `boundDevice` 等于传入 token、同设备放行、换设备 `BOUND`、`reset` 封禁后原设备 `REVOKED` 且不影响其他码、`allowRebind` 后新设备可绑且旧设备进 `revokedDevices`、黑名单拦截、`reset` 返回 `previousDevice`（踢线依赖）。并显式断言 `boundDevice` **不是** 64 位 sha256，作为将来哈希化的绊线。
 
-（另有 `room-lifecycle`、`vip`、`admin`、`messages`、`announcement` 五套，覆盖房间回收、激活码、站长后台接口、留言板与首页公告；`admin-ui` 与 `env-guard` 已在上面单列，不重复计数。连同上面 10 套共 **15 套**。）
+（另有 `room-lifecycle`、`vip`、`admin`、`messages`、`announcement` 五套，覆盖房间回收、激活码、站长后台接口、留言板与首页公告；`admin-ui`、`env-guard` 与 `device-token` 已在上面单列，不重复计数。连同上面 11 套共 **16 套**。）
 
 覆盖内容：
 
@@ -510,6 +511,7 @@ cet-arena/
 │  ├─ trial.test.js         # 限时闯关协议（关卡清单/限时/超时判定/结算/VIP 闸门）
 │  ├─ dom-contract.test.js  # DOM id 与脚本加载顺序契约
 │  ├─ env-guard.test.js     # 生产环境缺 ADMIN_PASSWORD 必须拒绝启动（失效保护）
+│  ├─ device-token.test.js  # 设备 Token 绑定明文基线（绑定/换机/黑名单/踢线返回值）
 │  └─ remote-smoke.js       # 公网 WebSocket 完整验收
 ├─ server.js                # 启动入口
 ├─ package.json
@@ -666,7 +668,7 @@ cet-arena/
 - [x] 同一台设备换 IP（宿舍 Wi-Fi ↔ 手机热点）仍可正常验证
 - [x] 旧数据（只有 boundIp、没有设备 Token）在同 IP 首次带 Token 时可平滑迁移
 - [x] 真机双浏览器验收：两个独立浏览器配置（不同 `device_token`、同一 IP）跑通上述拦截流程
-- [x] 自动化 `npm test` 通过（错词本 + DOM 契约 + 单人 UI + 单人协议 + 限时闯关 + 房间生命周期 + 激活码 + 抢答 + 竞速 + 混合题型 + 站长后台 + 留言板 + 生产环境密码守卫，共 15 套）
+- [x] 自动化 `npm test` 通过（错词本 + DOM 契约 + 单人 UI + 单人协议 + 限时闯关 + 房间生命周期 + 激活码 + 抢答 + 竞速 + 混合题型 + 站长后台 + 留言板 + 生产环境密码守卫 + 设备 Token 基线，共 16 套）
 
 ### 声音唤醒与留言板测试清单
 

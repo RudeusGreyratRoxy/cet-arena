@@ -7,6 +7,7 @@
 > 强制格式（最新在最上）：`[YYYY-MM-DD HH:mm] 版本号 | 核心改动 | 遗留问题`
 > 每次任务结束**必须**在此节点顶部新增一行，无需用户提醒。
 
+- [2026-11-17 21:08] `20261112-vip18`（版本不变·纯测试与文档） | 新增 `test/device-token.test.js`（**27 项断言**）并接入 `npm test`，锁住当前设备 Token **明文存储**行为：首次绑定 `boundDevice` 等于传入 token、同设备放行、换设备 `BOUND`、`reset` 后原设备 `REVOKED` 且不影响其他码、`allowRebind` 后新设备可绑且旧设备入 `revokedDevices`、黑名单拦截、`reset()` 返回 `previousDevice`（踢线依赖）与未绑定码不返回；测试链 **15 → 16 套全绿（16/16）**；README 同步（§3 十六套 + 新条目、§6 结构树、§8 验收项）；未改 `src/`、`data/`，未重启 | 设备 Token 哈希化时本套件会成批失败，按新语义改写即可（刻意设计成绊线）
 - [2026-11-14 11:41] `20261112-vip18`（版本不变·纯前端补丁） | 修后台留言回复框打字被清空：根因是 30 秒轮询 → `loadMessages()` → `renderMessages()` 把列表 `textContent=''` 重建，回复 `<input>` 被销毁重建、value 回落成已保存回复（通常空）；任何 `renderMessages()` 触发点（标记已处理/删除/切过滤）都会同样清空。修法：模块级 `replyDrafts` 草稿表（输入即存、重建时 `replyDrafts.get(id) ?? (item.reply || '')` 回填、提交成功 `delete` 后刷新），轮询在 `document.activeElement` 为 `.reply-input` 时跳过本轮 `loadMessages()`；`admin.html` 两处 `?v=` → `20261114-vip18`（`APP_VERSION` 未动，admin 不需握手）；`admin-ui.test.js` 新增 3 项草稿回归（已验证撤掉回填即失败），15 套全绿；已部署（纯前端，`git pull` 即生效，**未重启**） | 无
 - [2026-11-14 11:20] `20261112-vip18` | **新功能：留言回复**。数据层 `src/messages.js` 记录加 `reply`/`repliedAt`（默认 null，version 仍 1，当前 0 条记录无需迁移）、新增 `reply(id,text)`（≤100 码点，**回复即置 status=handled 并补 handledAt**，额度立即释放）与 `listByDevice(deviceHash)`；后端新增 socket `message:mine`（服务端算 deviceHash，**客户端无法指定他人设备**，只回白名单字段）与 `POST /api/admin/messages/reply`（404=不存在 / 400=空或超长，审计只记长度）；后台 `buildMessageItem` 加回复展示区 + `maxlength=100` 输入行（Enter 可直接发送）；用户端弹窗新增「我的留言」区，打开即拉取；三处渲染全部 `createElement`+`textContent`；`APP_VERSION → vip18`、index 三处 `?v=` 同步、`admin.html → 20261113-vip18`；`messages.test.js` 43 → **67 项断言**，15 套全绿 | 无
 - [2026-11-13 17:51] `20261112-vip17`（版本不变·本地凭据收尾） | **凭据迁移闭环**：`.tools/srvkey` 7 个文件迁至 `C:\Users\Yuan\.dsh\srvkey\`（工作区外、非任何 git 仓库），三个脚本内私钥路径已改、`rsh.py` 实测连通（回显 `MIGRATE_OK`）；服务器拉齐 `8d78468 → 54a02af`（纯文档，未重启，restarts 26）；顺带修正 `现为 14 套 → 15 套` | 无
@@ -48,12 +49,13 @@
 
 ## 当前进度
 
+- **【测试基线】设备 Token 明文行为已锁死（2026-11-17，版本不变）**：新增 `test/device-token.test.js`（**27 项断言**，已接入 `npm test`），把当前「`boundDevice` / `revokedDevices` 存原始 token 明文、直接 `===` 比较」的行为固化为回归：首次绑定明文写入、同设备复用、换设备 `BOUND`、`reset` 封禁后原设备 `REVOKED` 且不影响其他码、`allowRebind` 后新设备可绑且旧设备进黑名单、`revokedDevices` 拦截、`reset` 返回 `previousDevice`（在线踢线依赖）与未绑定码不返回。其中**刻意断言 `boundDevice` 不是 64 位 sha256**——将来做设备 Token 哈希化时本套件会成批失败，作为改造信号，避免「改了存储格式却没人发现旧数据全被判 `BOUND`」。测试链 **16 套全绿**。
 - **【新功能 · 已上线】留言回复（版本 `20261112-vip18`，2026-11-14）**：
   - **数据层**：`src/messages.js` 记录新增 `reply` / `repliedAt`（默认 `null`，`version` 仍 1；当时 `messages.json` 为 0 条记录，无需迁移）。新增 `reply(id, text)`：`cleanContent` 后按码点 ≤ **100 字**，空回复 `EMPTY_REPLY`、超长 `REPLY_TOO_LONG`、id 不存在 `NOT_FOUND`；写入回复的**同时**把 `status` 置 `handled` 并补 `handledAt`——回复即处理，额度立刻归还。新增 `listByDevice(deviceHash)`（倒序，空哈希返回空数组）。
   - **后端**：socket `message:mine`（payload `{deviceToken}`）由服务端自己算 `sha256(deviceToken)` 再反查，**客户端无法指定他人设备**，只回 `{id, content, reply, repliedAt, createdAt, status}`；`POST /api/admin/messages/reply`（`requireAdmin`）区分 400/404，审计只记 id 与长度、不记正文。原 4 个管理接口未改动。
   - **前端**：后台 `buildMessageItem` 在留言正文下方加回复展示区，并加 `maxlength=100` 输入行 + 「回复」按钮（Enter 可直接发送），全部 `createElement` + `textContent`；用户端 `#contactOverlay` 新增「我的留言」区（`loadMyMessages` / `renderMyMessages`），打开弹窗即拉取，同样只用 `textContent`。
   - **版本**：`APP_VERSION → 20261112-vip18`（`src/version.js` 与 `public/app.js` 同值），`index.html` 三处 `?v=` 同步；`admin.html` 用另一个新值 `20261113-vip18`（admin 不参与 `APP_VERSION`）。
-  - **测试**：`test/messages.test.js` 由 43 → **67 项断言**（回复成功/超长/空/不存在、回复后自动已处理、未登录 401、`message:mine` 能查到自己的回复、查不到别的设备、字段白名单、缺 Token 被拒）；全量 **15 套全绿**。
+  - **测试**：`test/messages.test.js` 由 43 → **67 项断言**（回复成功/超长/空/不存在、回复后自动已处理、未登录 401、`message:mine` 能查到自己的回复、查不到别的设备、字段白名单、缺 Token 被拒）；全量 **16 套全绿**（该功能上线时为 15 套，后加 device-token 变 16）。
 - **【安全加固 · 已上线】生产环境站长密码失效保护（版本仍为 `20261112-vip17`，仅后端、不动前端）**：
   - **问题**：`src/adminAuth.js` 原来写 `options.password || process.env.ADMIN_PASSWORD || DEFAULT_PASSWORD`，`||` 把空串当假值，因此 `ADMIN_PASSWORD=""`（注入失败/变量名写错/漏传值）会**静默降级**成仓库与 README 里都公开的 `boss2026`，且线上无任何告警。属于「失效保护缺失」，不是可用性优化。
   - **修法（方案 A：守卫放单入口，爆炸半径最小）**：
@@ -79,7 +81,7 @@
   - 前端：`new Audio('/audio/<word>.mp3?v=2')` 播放，元素缓存上限 60；题目到达即 `preload`，200ms 后播放；唤醒按钮改为播放 `_silent.mp3`（0.5 秒静音），不再依赖任何 TTS 能力检测。
   - **整局预取不可行**：中译英/听音选词的单词就是答案，提前下发等于泄题，只能题目到达后再取。
   - `public/debug-panel.js` 与 `window.__cetDebug` 已彻底删除。
-  - 测试：`solo-ui` 的假 TTS 已改为假 `Audio` 并断言播放地址；**当时**全量 11 套通过（现为 15 套）；无头 Chrome 实测"进房间→按钮出现→点击解锁→单词播放成功→控制台 0 报错"。
+  - 测试：`solo-ui` 的假 TTS 已改为假 `Audio` 并断言播放地址；**当时**全量 11 套通过（现为 16 套）；无头 Chrome 实测"进房间→按钮出现→点击解锁→单词播放成功→控制台 0 报错"。
 - **【新功能 1】声音唤醒引导（已随 vip8 于 2026-11-12 15:55 上线）**：准备页/对局页顶部显示「🔊 点击唤醒声音」，点击后在同步手势里播放 0.5 秒静音 MP3；`play()` resolve 即解锁并隐藏按钮，reject 则保留按钮提示重试。
 - **【新功能 2】联系站长留言板（vip9 起为动态配额）**：首页右下角悬浮按钮 → 弹窗输入（原生 `maxlength=50` + 实时字数）→ socket `message:create`。服务端按 `device_token` 的 SHA-256 **实时统计「未处理」条数**，同一设备**同时最多 5 条未处理**留言；站长标记已处理或删除后额度自动归还。另加 5 秒冷却防连点，落 `data/messages.json`（已 gitignore）。后台「留言管理」标签页（带待处理红点），按时间倒序，可标记已处理 / 恢复 / 删除。
 - **【重要机制变更】卡密绑定主体从「IP」改为「设备 Token」**（已上线，版本 `20261112-vip5`）：
