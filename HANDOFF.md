@@ -103,7 +103,7 @@
 - 环境变量：重启前后 `ADMIN_PASSWORD` len=11、`VIP_UNLIMITED_CODES` len=27，长度一致
 - 地址：<http://1.15.152.160:3000>　后台：<http://1.15.152.160:3000/admin>
 - 音频：`public/audio/` 2869 个文件（26.38MB），`/audio/<word>.mp3?v=2` 走 immutable 强缓存
-- 留言：`data/messages.json`，验收数据已清理；最新状态以 `/admin` →「留言管理」为准
+- 留言：`data/messages.json` 线上已有真实留言（约 1321B，2026-11-14 起）；最新状态以 `/admin` →「留言管理」为准
 - 卡密状态：种子 `data/vip_codes.json` 的 `codes` **已清空为 `{}`**（原 9 条 `once` 因公开泄露作废并移除，实测 9/9 返回 `INVALID`）+ 环境变量 `VIP_UNLIMITED_CODES` 注入 2 条 `unlimited`（实测均 `OK`）；`data/vip_codes.state.json` 现存 **4 条记录、`revoked` 0 条**（含 2 条已作废种子码的孤儿绑定记录，无害）；运行时自定义码落 `data/vip_codes.custom.json`
 - 进程环境：`ADMIN_PASSWORD` 与 `VIP_UNLIMITED_CODES` 均已注入并由 `pm2 save` 持久化（复核：`PID=$(pm2 pid cet-arena)` 后 `tr '\0' '\n' < /proc/$PID/environ | grep -E '^(ADMIN_PASSWORD|VIP_UNLIMITED_CODES)='`，只输出键名、不输出值）
 
