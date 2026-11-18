@@ -9,7 +9,7 @@
     device: 'cetArena.deviceToken.v1',
     announcement: 'cetArena.announcementSeen.v1',
   };
-  const APP_VERSION = '20261112-vip18';
+  const APP_VERSION = '20261118-vip19';
 
   const VIEW_IDS = ['loading', 'home', 'room', 'game', 'result', 'solo', 'levels', 'trial'];
 
@@ -2249,7 +2249,9 @@
     el.shareLevel.textContent =
       room.level === 'CET6'
         ? '当前词库：CET-6 核心（建设中）'
-        : '当前词库：CET-4 核心（200 词）';
+        : room.wordCount
+          ? `当前词库：CET-4 核心（${room.wordCount} 词）`
+          : '当前词库：CET-4 核心';
     el.lobbyPlayers.replaceChildren();
 
     const me = findMe();
@@ -2273,12 +2275,15 @@
 
     el.levelSelect.value = level;
     el.levelSelect.disabled = !isHost || !connected;
+    const cet4Label = room.wordCount
+      ? `当前词库：CET-4 核心（${room.wordCount} 词）`
+      : '当前词库：CET-4 核心';
     el.levelHint.textContent =
       level === 'CET6'
         ? '六级词库正在建设中，请先体验四级'
         : isHost
-          ? '当前词库：CET-4 核心（200 词）'
-          : '当前词库：CET-4 核心（200 词）· 由房主选择';
+          ? cet4Label
+          : `${cet4Label} · 由房主选择`;
 
     el.modeQuizBtn.classList.toggle('is-active', mode === 'quiz');
     el.modeRaceBtn.classList.toggle('is-active', mode === 'race');

@@ -56,6 +56,11 @@ function createArenaServer(options = {}) {
   const words = options.words || loadWords();
   const wordById = new Map(words.map((entry) => [entry.id, entry]));
   const wordByName = new Map(words.map((entry) => [entry.word.toLowerCase(), entry]));
+  // 按 level 预统计词数，供房间界面显示「词库 N 词」；将来补上 CET6 会自动生效。
+  const wordCountByLevel = words.reduce((acc, entry) => {
+    acc[entry.level] = (acc[entry.level] || 0) + 1;
+    return acc;
+  }, {});
   const vip = options.vip || createVipStore(options.vipOptions);
   const messages = options.messages || createMessageStore(options.messageOptions);
   const announcement =
@@ -537,6 +542,8 @@ function createArenaServer(options = {}) {
       code: room.code,
       hostId: room.hostId,
       level: room.level,
+      // 该 level 实际可用词数，前端据此显示「（N 词）」，不再硬编码。
+      wordCount: wordCountByLevel[room.level] || 0,
       mode: room.mode,
       status: room.status,
       maxPlayers: 2,
