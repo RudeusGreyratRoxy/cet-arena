@@ -7,6 +7,7 @@
 > 强制格式（最新在最上）：`[YYYY-MM-DD HH:mm] 版本号 | 核心改动 | 遗留问题`
 > 每次任务结束**必须**在此节点顶部新增一行，无需用户提醒。
 
+- [2026-11-18 21:16] `20261118-vip19` | 修复房间界面硬编码「200 词」：`roomView()` 新增 `wordCount`（启动时按 level 预统计，CET4=2868，CET6 将来自动生效），`public/app.js` 四处文案改动态拼接并保留「取不到则降级」分支，`index.html` 初始占位去掉数字；`APP_VERSION` 与 `index.html` 三处 `?v=` → `20261118-vip19`（admin 不动，仍 `20261114-vip18`）；16 套全绿；已部署：安全重启 `restarts 29 → 30`、`ADMIN_PASSWORD` len=11 / `VIP_UNLIMITED_CODES` len=27 前后一致、healthz 返回 vip19、端到端建房间实测 `room.wordCount = 2868` | 无
 - [2026-11-18 20:30] `20261112-vip18`（版本不变·纯文档） | 待办补登「messages 同毫秒排序 tie-breaker」：记录 `byNewestFirst` 只比 `createdAt`、同毫秒排序未定义，当前由 `test/messages.test.js` 注入可控时钟规避，生产 5 秒冷却下几乎不触发，优先级低；若确定化需同时改 `list()` 与 `listByDevice()` | 无
 - [2026-11-17 21:08] `20261112-vip18`（版本不变·纯测试与文档） | 新增 `test/device-token.test.js`（**27 项断言**）并接入 `npm test`，锁住当前设备 Token **明文存储**行为：首次绑定 `boundDevice` 等于传入 token、同设备放行、换设备 `BOUND`、`reset` 后原设备 `REVOKED` 且不影响其他码、`allowRebind` 后新设备可绑且旧设备入 `revokedDevices`、黑名单拦截、`reset()` 返回 `previousDevice`（踢线依赖）与未绑定码不返回；测试链 **15 → 16 套全绿（16/16）**；README 同步（§3 十六套 + 新条目、§6 结构树、§8 验收项）；未改 `src/`、`data/`，未重启 | 设备 Token 哈希化时本套件会成批失败，按新语义改写即可（刻意设计成绊线）
 - [2026-11-14 11:41] `20261112-vip18`（版本不变·纯前端补丁） | 修后台留言回复框打字被清空：根因是 30 秒轮询 → `loadMessages()` → `renderMessages()` 把列表 `textContent=''` 重建，回复 `<input>` 被销毁重建、value 回落成已保存回复（通常空）；任何 `renderMessages()` 触发点（标记已处理/删除/切过滤）都会同样清空。修法：模块级 `replyDrafts` 草稿表（输入即存、重建时 `replyDrafts.get(id) ?? (item.reply || '')` 回填、提交成功 `delete` 后刷新），轮询在 `document.activeElement` 为 `.reply-input` 时跳过本轮 `loadMessages()`；`admin.html` 两处 `?v=` → `20261114-vip18`（`APP_VERSION` 未动，admin 不需握手）；`admin-ui.test.js` 新增 3 项草稿回归（已验证撤掉回填即失败），15 套全绿；已部署（纯前端，`git pull` 即生效，**未重启**） | 无
@@ -99,15 +100,16 @@
 
 ## 线上版本
 
-- 服务版本：`20261112-vip18`，`GET /healthz` 实测 `{"ok":true,"rooms":0,"players":0,"words":2868,"version":"20261112-vip18"}`；PM2 进程 online、**restarts 28**、2026-11-17 20:41 因作废 9 条种子码部署重启（此前 27 是 11-14 11:22 的留言回复上线）
-- 服务器代码提交：`b321979 作废公开泄露的9条种子码（含已用2条），种子codes清空`
-- 服务器 HEAD：与本地一致（该提交改 `data/vip_codes.json`，种子只在启动时加载，**必须重启才生效，已显式回注环境变量重启**；只改 README/HANDOFF 的文档提交则 `git pull` 即可，不需要 `pm2 restart`）
-- 前端版本号：本地 `20261112-vip18` / 线上 `20261112-vip18`（已同步）；`index.html` 三处 `?v=` 为 `20261112-vip18`，`admin.html` 两处 `?v=` 为 `20261114-vip18`（admin 不参与 `APP_VERSION`）
+- 服务版本：`20261118-vip19`，`GET /healthz` 实测 `{"ok":true,"rooms":0,"players":0,"words":2868,"version":"20261118-vip19"}`；PM2 进程 online、**restarts 30**、2026-11-18 21:15 因「词库显示修复」部署重启（此前 29 是 11-18 20:12 的设备 Token 哈希化上线）
+- 服务器代码提交：`7c9779f fix: 房间词库显示真实词数，后端下发wordCount并移除硬编码200词(vip19)`
+- 服务器 HEAD：与本地一致（该提交改 `src/` 与 `public/`，**必须重启才生效，已显式回注环境变量重启**；只改 README/HANDOFF 的文档提交则 `git pull` 即可，不需要 `pm2 restart`）
+- 前端版本号：本地 `20261118-vip19` / 线上 `20261118-vip19`（已同步）；`index.html` 三处 `?v=` 为 `20261118-vip19`，`admin.html` 两处 `?v=` 为 `20261114-vip18`（admin 不参与 `APP_VERSION`）
+- 词库显示：房间界面不再硬编码「200 词」。`roomView()` 按 `room.level` 下发 `wordCount`（启动时预统计，CET4=2868，CET6 建好后自动生效），前端 `shareLevel` 与 `levelHint` 动态拼接，取不到时降级为「当前词库：CET-4 核心」；`index.html` 初始占位也已去掉数字。实测建房间返回 `room.wordCount = 2868`
 - 环境变量：重启前后 `ADMIN_PASSWORD` len=11、`VIP_UNLIMITED_CODES` len=27，长度一致
 - 地址：<http://1.15.152.160:3000>　后台：<http://1.15.152.160:3000/admin>
 - 音频：`public/audio/` 2869 个文件（26.38MB），`/audio/<word>.mp3?v=2` 走 immutable 强缓存
 - 留言：`data/messages.json` 线上已有真实留言（约 1321B，2026-11-14 起）；最新状态以 `/admin` →「留言管理」为准
-- 卡密状态：种子 `data/vip_codes.json` 的 `codes` **已清空为 `{}`**（原 9 条 `once` 因公开泄露作废并移除，实测 9/9 返回 `INVALID`）+ 环境变量 `VIP_UNLIMITED_CODES` 注入 2 条 `unlimited`（实测均 `OK`）；`data/vip_codes.state.json` 现存 **4 条记录、`revoked` 0 条**（含 2 条已作废种子码的孤儿绑定记录，无害）；运行时自定义码落 `data/vip_codes.custom.json`
+- 卡密状态：种子 `data/vip_codes.json` 的 `codes` **已清空为 `{}`**（原 9 条 `once` 因公开泄露作废并移除，实测 9/9 返回 `INVALID`）+ 环境变量 `VIP_UNLIMITED_CODES` 注入 2 条 `unlimited`（实测均 `OK`）；`data/vip_codes.state.json` 现存 **3 条记录、`revoked` 0 条**（2026-11-18 20:46 经后台「彻底删除」由 4 条减为 3 条；`boundDevice` 仍为明文，A 方案不强制迁移）；运行时自定义码落 `data/vip_codes.custom.json`
 - 进程环境：`ADMIN_PASSWORD` 与 `VIP_UNLIMITED_CODES` 均已注入并由 `pm2 save` 持久化（复核：`PID=$(pm2 pid cet-arena)` 后 `tr '\0' '\n' < /proc/$PID/environ | grep -E '^(ADMIN_PASSWORD|VIP_UNLIMITED_CODES)='`，只输出键名、不输出值）
 
 ## 待办事项
