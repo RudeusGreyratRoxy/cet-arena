@@ -136,7 +136,14 @@ async function main() {
     ok('仅写入 1 条', readFile().messages.length === 1);
 
     console.log('=== 4. 列表与统计 ===');
-    store = freshStore();
+    // 注入可控时钟：每次 now() 前进 1 秒，保证两条留言的 createdAt 必然不同，
+    // 排序断言不再依赖「两次写入是否恰好跨毫秒」（Linux 上约 70% 会同毫秒而误报）。
+    // 说明：同毫秒排序未定义（byNewestFirst 只比 createdAt、无 tie-breaker）；
+    // 生产上同一设备有 5 秒冷却，几乎不可能触发。若未来要把产品语义也确定化，
+    // 可在 HANDOFF 待办里登记「产品侧 tie-breaker」（list()/listByDevice() 同毫秒时按插入序倒排）。
+    let clockTick = Date.parse('2026-11-18T00:00:00.000Z');
+    const clock = () => new Date((clockTick += 1000));
+    store = freshStore({ now: clock });
     store.add({ content: 'A 留言', deviceToken: DEVICE_A });
     store.add({ content: 'B 留言', deviceToken: DEVICE_B });
     const listed = store.list();
