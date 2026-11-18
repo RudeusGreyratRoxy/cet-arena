@@ -7,6 +7,7 @@
 > 强制格式（最新在最上）：`[YYYY-MM-DD HH:mm] 版本号 | 核心改动 | 遗留问题`
 > 每次任务结束**必须**在此节点顶部新增一行，无需用户提醒。
 
+- [2026-11-18 20:30] `20261112-vip18`（版本不变·纯文档） | 待办补登「messages 同毫秒排序 tie-breaker」：记录 `byNewestFirst` 只比 `createdAt`、同毫秒排序未定义，当前由 `test/messages.test.js` 注入可控时钟规避，生产 5 秒冷却下几乎不触发，优先级低；若确定化需同时改 `list()` 与 `listByDevice()` | 无
 - [2026-11-17 21:08] `20261112-vip18`（版本不变·纯测试与文档） | 新增 `test/device-token.test.js`（**27 项断言**）并接入 `npm test`，锁住当前设备 Token **明文存储**行为：首次绑定 `boundDevice` 等于传入 token、同设备放行、换设备 `BOUND`、`reset` 后原设备 `REVOKED` 且不影响其他码、`allowRebind` 后新设备可绑且旧设备入 `revokedDevices`、黑名单拦截、`reset()` 返回 `previousDevice`（踢线依赖）与未绑定码不返回；测试链 **15 → 16 套全绿（16/16）**；README 同步（§3 十六套 + 新条目、§6 结构树、§8 验收项）；未改 `src/`、`data/`，未重启 | 设备 Token 哈希化时本套件会成批失败，按新语义改写即可（刻意设计成绊线）
 - [2026-11-14 11:41] `20261112-vip18`（版本不变·纯前端补丁） | 修后台留言回复框打字被清空：根因是 30 秒轮询 → `loadMessages()` → `renderMessages()` 把列表 `textContent=''` 重建，回复 `<input>` 被销毁重建、value 回落成已保存回复（通常空）；任何 `renderMessages()` 触发点（标记已处理/删除/切过滤）都会同样清空。修法：模块级 `replyDrafts` 草稿表（输入即存、重建时 `replyDrafts.get(id) ?? (item.reply || '')` 回填、提交成功 `delete` 后刷新），轮询在 `document.activeElement` 为 `.reply-input` 时跳过本轮 `loadMessages()`；`admin.html` 两处 `?v=` → `20261114-vip18`（`APP_VERSION` 未动，admin 不需握手）；`admin-ui.test.js` 新增 3 项草稿回归（已验证撤掉回填即失败），15 套全绿；已部署（纯前端，`git pull` 即生效，**未重启**） | 无
 - [2026-11-14 11:20] `20261112-vip18` | **新功能：留言回复**。数据层 `src/messages.js` 记录加 `reply`/`repliedAt`（默认 null，version 仍 1，当前 0 条记录无需迁移）、新增 `reply(id,text)`（≤100 码点，**回复即置 status=handled 并补 handledAt**，额度立即释放）与 `listByDevice(deviceHash)`；后端新增 socket `message:mine`（服务端算 deviceHash，**客户端无法指定他人设备**，只回白名单字段）与 `POST /api/admin/messages/reply`（404=不存在 / 400=空或超长，审计只记长度）；后台 `buildMessageItem` 加回复展示区 + `maxlength=100` 输入行（Enter 可直接发送）；用户端弹窗新增「我的留言」区，打开即拉取；三处渲染全部 `createElement`+`textContent`；`APP_VERSION → vip18`、index 三处 `?v=` 同步、`admin.html → 20261113-vip18`；`messages.test.js` 43 → **67 项断言**，15 套全绿 | 无
@@ -118,6 +119,7 @@
 - 轮换密码注意：`--update-env` 会以当前 shell 环境覆盖进程环境，必须同时带上 `VIP_UNLIMITED_CODES`（以及 `NODE_ENV=production`），否则重启后服务会因守卫而**拒绝启动**。安全做法是从 `/proc/<旧 pid>/environ` 读回全部应用变量再回注，别裸敲 `pm2 restart`。
 - 轮换密码方式：`ADMIN_PASSWORD='新密码' pm2 restart cet-arena --update-env && pm2 save`（变量名固定，值只存在于服务器）。
 - 后续可选：留言按「已处理/待处理」分页、卡密按批次打标签、导出 CSV。
+- **低优先级 · 产品侧排序 tie-breaker（2026-11-18 登记）**：`src/messages.js` 的 `byNewestFirst` 只比较 `createdAt`，同毫秒时排序不确定（稳定排序会保留插入序，Linux 上约 70% 落同一毫秒）。当前由测试注入可控时钟规避（`test/messages.test.js` 第 4 节），生产上同一设备有 5 秒冷却、几乎不会触发。若未来要确定化，改为「时间倒序 + 同毫秒按插入序/id 倒序」，需同时改 `list()` 与 `listByDevice()`。
 - 重做音频：`PYTHONPATH=<.tools/pylibs-tts> python scripts/build_audio_edge.py --skip-existing`（需全权限 + 联网），换音源记得递增 `AUDIO_VERSION`。
 
 ## 未验证清单（截至 2026-11-13 17:05）
