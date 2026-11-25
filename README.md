@@ -28,6 +28,7 @@
 - 联系站长：首页右下角悬浮按钮，点开可写最多 50 字留言；按 `device_token` 做**动态配额**——同一设备**同时最多 5 条「未处理」**留言，站长标记已处理或删除后额度自动归还；服务器落 `data/messages.json`；后台「留言管理」标签页可按时间倒序查看、标记已处理、删除。**站长可对单条留言写回复（最多 100 字）**，回复后该条自动转为「已处理」；用户在同一个弹窗的「我的留言」区能看到自己的留言与站长回复（只按设备 Token 的哈希反查，看不到他人留言）。
 - 复盘：展示单词拼写、词性、完整释义、对错/未作答；答错后纠正的题仍标红；竞速另含双方进度、用时、错误数
 - 错词本（**VIP 专属**）：答错的单词自动存入浏览器 localStorage；单人「错词挑战」只考错词，**连续答对 3 次**才移出；免费用户入口显示「VIP 专属」，服务端 `solo:start` 同步拦截
+- 超长闯关（**marathon**，免费）：首页入口「超长闯关」。第一轮把全量词库洗牌作为答题队列，**答对进入下一题，答错也进入下一题但该词进「错词池」**；当前队列答完时错词池非空 → 洗牌作为新一轮继续，为空 → 通关。进度按 `deviceHash`（设备 Token 哈希）落 `data/marathon_progress.json`，刷新/重启服务都不丢；答题页显示当前轮次、本轮剩余、错词池大小，答对 0.8 秒、答错 1.5 秒后自动进入下一题，错题会同时标出正确选项；「重置进度」需二次确认。
 - 网络：顶部实时显示 Ping；>200ms 黄色、>500ms 红色；断线自动快速重连
 - 站长后台：访问 `/admin` 输入站长密码进入。分「卡密管理」与「留言管理」两个标签页，留言标签带待处理数量红点。卡密表展示类型、状态、绑定 IP、绑定设备（Token 前 8 位）与绑定时间，支持搜索；可一键批量生成新码、对已绑定卡密一键解绑重置；留言按时间倒序展示，可标记已处理 / 删除、**写/修改站长回复**。适配手机浏览器。所有管理接口在服务端强制校验站长密码，未登录一律 401。
 - 部署：单实例内存房间，支持本地运行、Cloudflare Quick Tunnel 与腾讯云 + PM2 公网部署
@@ -187,7 +188,7 @@ $env:CI="true"
 npm test
 ```
 
-该命令会运行十六套测试：
+该命令会运行十七套测试：
 
 - `test/wrongbook.test.js`：错词本纯逻辑（入库、去重、连对、清零、掌握移除、脏数据容错）。
 - `test/dom-contract.test.js`：`app.js` 引用的 DOM id 全部存在、脚本加载顺序正确。
@@ -200,8 +201,9 @@ npm test
 - `test/admin-ui.test.js`：假 DOM 真跑 `admin.js`，校验卡密列表渲染（拉黑数在 available/used/revoked 三种状态都必须显示）。
 - `test/env-guard.test.js`：站长密码失效保护——`NODE_ENV=production` 且 `ADMIN_PASSWORD` 缺失或 trim 后为空时，子进程跑 `server.js` 必须以退出码 1 结束并在 stderr 给出明确提示；同时覆盖「完全未设置才回落本地默认值」「空白值抛错」两条解析规则。
 - `test/device-token.test.js`：设备 Token 绑定的**明文行为基线**——首次绑定后 state 里 `boundDevice` 等于传入 token、同设备放行、换设备 `BOUND`、`reset` 封禁后原设备 `REVOKED` 且不影响其他码、`allowRebind` 后新设备可绑且旧设备进 `revokedDevices`、黑名单拦截、`reset` 返回 `previousDevice`（踢线依赖）。并显式断言 `boundDevice` **不是** 64 位 sha256，作为将来哈希化的绊线。
+- `test/marathon.test.js`：超长闯关后端——纯函数 `applyAnswer` 覆盖答对/答错推进、错词入池（同词去重）、队列答完切下一轮、全对通关；存储层覆盖落盘、跨实例（模拟重启）读回、返回副本、`reset`；socket 层覆盖首轮为全量词库、**题目不下发 `correctIndex`**、判分一致、非法选项/缺 `deviceToken`/未开始就答题，以及单题队列触发切轮。
 
-（另有 `room-lifecycle`、`vip`、`admin`、`messages`、`announcement` 五套，覆盖房间回收、激活码、站长后台接口、留言板与首页公告；`admin-ui`、`env-guard` 与 `device-token` 已在上面单列，不重复计数。连同上面 11 套共 **16 套**。）
+（另有 `room-lifecycle`、`vip`、`admin`、`messages`、`announcement` 五套，覆盖房间回收、激活码、站长后台接口、留言板与首页公告；`admin-ui`、`env-guard`、`device-token` 与 `marathon` 已在上面单列，不重复计数。连同上面 12 套共 **17 套**。）
 
 覆盖内容：
 
@@ -470,6 +472,7 @@ cet-arena/
 │  ├─ words.json           # CET-4 词库（2868 词，多释义 + 词性 + 词频）
 │  ├─ levels.json          # 闯关关卡（3 关 × 50 词，只存词条 id）
 │  ├─ announcement.json    # 首页公告（运行时状态，不入库，由后台发布）
+│  ├─ marathon_progress.json # 超长闯关进度（按 deviceHash，运行时状态，不入库）
 │  ├─ vip_codes.json       # 激活码种子（只读、入库）
 │  └─ vip_codes.custom.json  # 运行时新增卡密（批量/自定义生成，不入库）
 ├─ public/
@@ -491,6 +494,7 @@ cet-arena/
 ├─ src/
 │  ├─ app.js                # Express + Socket.IO 房间/抢答/竞速/单人挑战状态机
 │  ├─ levels.js             # 闯关关卡读取与校验（trialPoolFor / listLevels / 每题限时）
+│  ├─ marathon.js           # 超长闯关进度存储与轮次推进（applyAnswer / normalizeProgress / 原子落盘）
 │  ├─ adminAuth.js          # 站长后台鉴权（密码校验 / token / 爆破限流）
 │  ├─ messages.js           # 联系站长留言存储（内容校验 / 设备限流 / 原子持久化）
 │  ├─ announcement.js       # 首页公告存储（500 字上限 / 保留换行 / 原子持久化）
@@ -512,6 +516,7 @@ cet-arena/
 │  ├─ dom-contract.test.js  # DOM id 与脚本加载顺序契约
 │  ├─ env-guard.test.js     # 生产环境缺 ADMIN_PASSWORD 必须拒绝启动（失效保护）
 │  ├─ device-token.test.js  # 设备 Token 绑定明文基线（绑定/换机/黑名单/踢线返回值）
+│  ├─ marathon.test.js      # 超长闯关（轮次推进/错词池/通关/落盘/reset/socket 协议）
 │  └─ remote-smoke.js       # 公网 WebSocket 完整验收
 ├─ server.js                # 启动入口
 ├─ package.json
@@ -538,6 +543,7 @@ cet-arena/
 - **错词本存储**：`localStorage` 键 `cetArena.wrongBook.v1`，结构为 `{ version: 1, words: [{ word, level, streak, wrongCount, addedAt, updatedAt }] }`。**以单词为唯一键**——服务端复盘条目只有 `word`、没有 `id`（早期版本用 `id` 做键导致写入空数组，已修复并固化为回归测试）；读取时兼容纯字符串数组与带 `id` 的旧格式，损坏数据视为空错词本。
 - **单人挑战协议**：`solo:start / solo:next / solo:answer / solo:quit`。客户端只上传「当前仍未掌握」的单词列表，服务端按单词查词表（大小写不敏感）复现题目并判分；学习进度（连对次数、掌握状态）只存在浏览器，服务端不落库，换设备不互通。**该协议仅对 `socket.data.vip === true` 开放**，未激活连接一律返回 `VIP_REQUIRED`。
 - **限时闯关协议**：`trial:levels / trial:start / trial:answer / trial:next / trial:quit`，与错词挑战完全分离，免费可用。题目由服务端按关卡词池生成（客户端不能指定单词），每题下发 `deadline` 与 `timeLimitMs`；前端倒计时只负责展示与到点自动提交，**服务端按 `deadline + 300ms` 网络宽限复核**，迟到或 `index=null` 一律判超时答错，未作答直接点下一题同样记为错误。
+- **超长闯关协议（marathon）**：`marathon:start / marathon:answer / marathon:reset`，按 `deviceToken` 的 sha256（`deviceHash`）归属，进度落 `data/marathon_progress.json`（gitignore）。首轮把全量词 ID 洗牌成队列；`applyAnswer()` 纯函数负责推进：答对/答错都前进一格，答错的词 ID 进 `wrongPool`（同词去重），队列走完时错词池非空则洗牌成下一轮、为空则标记 `completed`。**存储只放词 ID 与轮次/下标，不存题目与答案**；每题由 `buildQuestion()` 现场生成，`correctIndex` 只在作答 ack 里下发。`normalizeProgress()` 会在词库缩水或下标越界时自动收口（切轮或判通关），避免卡死。重置需前端二次确认，服务端删除该 `deviceHash` 记录并清空当前 socket 会话。
 - **关卡数据**：`data/levels.json` 只存「关卡 → 词条 id 列表」，不往 `words.json` 里加 chapter 字段——词库是扁平的 2868 词，闯关只是它的一种视图，避免污染词库结构与音频/体检脚本。启动时校验：关卡 id 唯一、单关 ≥4 词（够 3 个干扰项）、引用的 id 必须存在于词库、免费关卡合集 ≥25 词（够竞速 25 题）。
 - **单题生成复用**：把 `buildQuestion(entry, pool, type)` 从 `buildQuestions` 中抽出，单人挑战与双人对战共用同一套题型判定、干扰项与选项打乱逻辑，避免两套出题规则漂移。
 - **作答后才下发答案**：`game:answer` 与 `solo:answer` 的 ack 才携带 `correctIndex`；听音题的中文释义只在作答后以 `reveal` 字段下发（竞速模式在答错冷却期展示，抢答与单人即时展示）。题目事件本身仍然不含答案。
@@ -649,6 +655,11 @@ cet-arena/
 - [x] 超时判定以服务端 deadline 为准：迟到答案与 `index=null` 均判超时、不计分，但仍返回正确答案
 - [x] 闯关每关 10 题，题目只来自该关词库，结算显示题数/答对/答错或超时
 - [x] 错词挑战只考错词，同一单词连续答对 3 次后移出错词本，答错则连对清零
+- [x] 首页「超长闯关」免费可进，首轮覆盖全量词库，答题页显示当前轮次 / 本轮剩余 / 错词池大小
+- [x] 答对 0.8 秒、答错 1.5 秒后自动进入下一题；答错时标红并高亮正确选项
+- [x] 队列答完且错词池非空 → 自动洗牌进入下一轮；错词池为空 → 显示通关结算与「重新开始」
+- [x] 进度按设备哈希落盘，刷新/重启服务后继续；「重置进度」二次确认后清空
+- [x] 题目事件不下发 `correctIndex`，答案只在作答 ack 中返回
 - [x] 后台「公告管理」可发布 / 下架公告，首页横幅按 `updatedAt` 去重，关闭后同版本不再弹出
 - [x] 公告渲染使用 `textContent`（含换行保留），未登录调用 `POST /api/admin/announcement` 返回 401
 - [x] 购买页三档套餐均标注「有效期：1年」，卡密输入框下方有「⭐ 增值服务：专属定制卡密 +9.9元」说明
@@ -668,7 +679,7 @@ cet-arena/
 - [x] 同一台设备换 IP（宿舍 Wi-Fi ↔ 手机热点）仍可正常验证
 - [x] 旧数据（只有 boundIp、没有设备 Token）在同 IP 首次带 Token 时可平滑迁移
 - [x] 真机双浏览器验收：两个独立浏览器配置（不同 `device_token`、同一 IP）跑通上述拦截流程
-- [x] 自动化 `npm test` 通过（错词本 + DOM 契约 + 单人 UI + 单人协议 + 限时闯关 + 房间生命周期 + 激活码 + 抢答 + 竞速 + 混合题型 + 站长后台 + 留言板 + 生产环境密码守卫 + 设备 Token 基线，共 16 套）
+- [x] 自动化 `npm test` 通过（错词本 + DOM 契约 + 单人 UI + 单人协议 + 限时闯关 + 房间生命周期 + 激活码 + 抢答 + 竞速 + 混合题型 + 站长后台 + 留言板 + 生产环境密码守卫 + 设备 Token 基线 + 超长闯关，共 17 套）
 
 ### 声音唤醒与留言板测试清单
 

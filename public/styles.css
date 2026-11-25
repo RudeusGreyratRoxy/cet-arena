@@ -2891,9 +2891,23 @@ a:focus-visible {
    限时闯关（免费体验）
    --------------------------------------------------------------- */
 #view-levels,
-#view-trial {
+#view-trial,
+#view-marathon {
   width: min(860px, 100%);
   margin: 0 auto;
+}
+
+/* 超长闯关（marathon）：头部操作区与入口徽标 */
+.marathon-head-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.btn-marathon .challenge-count {
+  color: #0d1a05;
+  background: var(--accent);
 }
 
 .btn-trial .challenge-count {

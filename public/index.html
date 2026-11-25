@@ -10,7 +10,7 @@
     />
     <title>CET Arena · 双人词汇对战</title>
     <link rel="icon" href="data:,">
-    <link rel="stylesheet" href="/styles.css?v=20261118-vip19" />
+    <link rel="stylesheet" href="/styles.css?v=20261125-vip20" />
   </head>
   <body data-view="loading">
     <div class="ambient ambient-one" aria-hidden="true"></div>
@@ -146,6 +146,17 @@
             </button>
             <p class="hint" id="wrongBookTip">
               只考你答错过的词，同一个词连续答对 3 次就移出错词本。
+            </p>
+
+            <button class="btn btn-challenge btn-marathon" id="marathonEntryBtn" type="button">
+              <span class="challenge-main">
+                <span class="challenge-title">超长闯关</span>
+                <small class="challenge-sub" id="marathonEntryHint">答完整轮 · 错词自动重来</small>
+              </span>
+              <span class="challenge-count" aria-label="超长闯关">∞</span>
+            </button>
+            <p class="hint" id="marathonEntryTip">
+              先答完整轮词库，答错的词会组成下一轮继续考，直到一个错词都不剩才算通关。进度自动保存。
             </p>
 
             <p class="home-foot">
@@ -409,6 +420,61 @@
           </div>
         </div>
       </section>
+
+      <section class="view marathon-view" id="view-marathon" aria-label="超长闯关" hidden>
+        <div class="solo-head">
+          <div>
+            <p class="eyebrow">MARATHON · ROUND <span id="marathonRoundTag">1</span></p>
+            <h2 id="marathonTitle">超长闯关</h2>
+          </div>
+          <div class="marathon-head-actions">
+            <button class="btn btn-small btn-ghost" id="marathonResetBtn" type="button">
+              重置进度
+            </button>
+            <button class="btn btn-small btn-ghost" id="marathonExitBtn" type="button">
+              退出
+            </button>
+          </div>
+        </div>
+
+        <div class="solo-stats" aria-live="polite">
+          <div class="solo-stat"><strong id="marathonRoundStat">1</strong><span>当前轮次</span></div>
+          <div class="solo-stat"><strong id="marathonRemaining">0</strong><span>本轮剩余</span></div>
+          <div class="solo-stat"><strong id="marathonWrongPool">0</strong><span>错词池</span></div>
+        </div>
+
+        <div id="marathonPlay">
+          <div class="question-card">
+            <p class="question-prompt" id="marathonPrompt">选择正确的中文释义</p>
+            <h2 class="question-word" id="marathonQuestionWord">
+              <span class="question-word-text" id="marathonWordText">Loading</span>
+              <button
+                class="speak-btn"
+                id="marathonSpeakBtn"
+                type="button"
+                aria-label="播放发音"
+                title="播放发音"
+                hidden
+              >
+                🔊
+              </button>
+            </h2>
+            <div class="options" id="marathonOptions"></div>
+            <div class="answer-reveal" id="marathonReveal" hidden aria-live="polite"></div>
+            <div class="feedback" id="marathonFeedback" role="status" aria-live="polite"></div>
+          </div>
+        </div>
+
+        <div class="solo-summary" id="marathonSummary" hidden>
+          <p class="eyebrow">MARATHON COMPLETE</p>
+          <h3 id="marathonSummaryTitle">通关！</h3>
+          <p class="solo-summary-copy" id="marathonSummaryCopy"></p>
+          <div class="solo-summary-actions">
+            <button class="btn btn-primary" id="marathonAgainBtn" type="button">重新开始</button>
+            <button class="btn btn-ghost" id="marathonHomeBtn" type="button">返回首页</button>
+          </div>
+        </div>
+      </section>
     </main>
 
     <footer class="footer">
@@ -545,7 +611,7 @@
     <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
 
     <script src="/socket.io/socket.io.min.js"></script>
-    <script src="/wrongbook.js?v=20261118-vip19"></script>
-    <script src="/app.js?v=20261118-vip19"></script>
+    <script src="/wrongbook.js?v=20261125-vip20"></script>
+    <script src="/app.js?v=20261125-vip20"></script>
   </body>
 </html>

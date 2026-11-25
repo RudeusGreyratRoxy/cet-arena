@@ -9,9 +9,9 @@
     device: 'cetArena.deviceToken.v1',
     announcement: 'cetArena.announcementSeen.v1',
   };
-  const APP_VERSION = '20261118-vip19';
+  const APP_VERSION = '20261125-vip20';
 
-  const VIEW_IDS = ['loading', 'home', 'room', 'game', 'result', 'solo', 'levels', 'trial'];
+  const VIEW_IDS = ['loading', 'home', 'room', 'game', 'result', 'solo', 'levels', 'trial', 'marathon'];
 
   // 关于我们：纯静态文案，渲染时用 textContent（不拼 HTML）
   const ABOUT_TEXT =
@@ -83,6 +83,30 @@
     trialAgainBtn: document.getElementById('trialAgainBtn'),
     trialLevelsBtn: document.getElementById('trialLevelsBtn'),
     trialExitBtn: document.getElementById('trialExitBtn'),
+
+    // 超长闯关：首页入口 + 答题页 + 通关结算
+    marathonEntryBtn: document.getElementById('marathonEntryBtn'),
+    marathonEntryHint: document.getElementById('marathonEntryHint'),
+    marathonRoundTag: document.getElementById('marathonRoundTag'),
+    marathonTitle: document.getElementById('marathonTitle'),
+    marathonRoundStat: document.getElementById('marathonRoundStat'),
+    marathonRemaining: document.getElementById('marathonRemaining'),
+    marathonWrongPool: document.getElementById('marathonWrongPool'),
+    marathonPlay: document.getElementById('marathonPlay'),
+    marathonPrompt: document.getElementById('marathonPrompt'),
+    marathonQuestionWord: document.getElementById('marathonQuestionWord'),
+    marathonWordText: document.getElementById('marathonWordText'),
+    marathonSpeakBtn: document.getElementById('marathonSpeakBtn'),
+    marathonOptions: document.getElementById('marathonOptions'),
+    marathonReveal: document.getElementById('marathonReveal'),
+    marathonFeedback: document.getElementById('marathonFeedback'),
+    marathonSummary: document.getElementById('marathonSummary'),
+    marathonSummaryTitle: document.getElementById('marathonSummaryTitle'),
+    marathonSummaryCopy: document.getElementById('marathonSummaryCopy'),
+    marathonAgainBtn: document.getElementById('marathonAgainBtn'),
+    marathonHomeBtn: document.getElementById('marathonHomeBtn'),
+    marathonResetBtn: document.getElementById('marathonResetBtn'),
+    marathonExitBtn: document.getElementById('marathonExitBtn'),
 
     // 首页更新公告（横幅）
     announcementBanner: document.getElementById('announcementBanner'),
@@ -237,6 +261,16 @@
       busy: false,
       timer: null,
     },
+    marathon: {
+      active: false,
+      busy: false,
+      round: 1,
+      total: 0,
+      remaining: 0,
+      wrongPoolSize: 0,
+      current: null,
+      nextTimer: null,
+    },
   };
 
   init();
@@ -316,6 +350,18 @@
     });
     el.trialSpeakBtn.addEventListener('click', handleSpeakTrigger);
     el.trialSpeakBtn.addEventListener('touchend', handleSpeakTrigger);
+
+    // 超长闯关（marathon）
+    el.marathonEntryBtn.addEventListener('click', openMarathon);
+    el.marathonExitBtn.addEventListener('click', exitMarathon);
+    el.marathonResetBtn.addEventListener('click', resetMarathon);
+    el.marathonAgainBtn.addEventListener('click', restartMarathon);
+    el.marathonHomeBtn.addEventListener('click', () => {
+      exitMarathon();
+      setView('home');
+    });
+    el.marathonSpeakBtn.addEventListener('click', handleSpeakTrigger);
+    el.marathonSpeakBtn.addEventListener('touchend', handleSpeakTrigger);
 
     el.announcementClose.addEventListener('click', closeAnnouncement);
 
@@ -3371,6 +3417,227 @@
   function setTrialFeedback(text, kind) {
     el.trialFeedback.textContent = text;
     el.trialFeedback.className = `feedback${kind ? ` is-${kind}` : ''}`;
+  }
+
+  // ---------------------------------------------------------------- 超长闯关（marathon）
+
+  function setMarathonFeedback(text, kind) {
+    if (!el.marathonFeedback) return;
+    el.marathonFeedback.textContent = text;
+    el.marathonFeedback.className = `feedback${kind ? ` is-${kind}` : ''}`;
+  }
+
+  function renderMarathonStats(payload) {
+    const round = Number(payload && payload.round) || 1;
+    const remaining = Math.max(0, Number(payload && payload.remaining) || 0);
+    const wrongPool = Math.max(0, Number(payload && payload.wrongPoolSize) || 0);
+    state.marathon.round = round;
+    state.marathon.remaining = remaining;
+    state.marathon.wrongPoolSize = wrongPool;
+    if (el.marathonRoundTag) el.marathonRoundTag.textContent = String(round);
+    if (el.marathonRoundStat) el.marathonRoundStat.textContent = String(round);
+    if (el.marathonRemaining) el.marathonRemaining.textContent = String(remaining);
+    if (el.marathonWrongPool) el.marathonWrongPool.textContent = String(wrongPool);
+  }
+
+  function clearMarathonTimer() {
+    if (state.marathon.nextTimer) {
+      window.clearTimeout(state.marathon.nextTimer);
+      state.marathon.nextTimer = null;
+    }
+  }
+
+  function renderMarathonQuestion(question) {
+    if (!question) return;
+    hideAnswerReveal(el.marathonReveal);
+    const isListen = question.type === 'listen';
+    const isZh2en = question.type === 'zh2en';
+
+    el.marathonPrompt.textContent =
+      question.promptLabel ||
+      (isListen ? '点击喇叭听发音，选择正确的英文单词' : '选择正确的中文释义');
+    el.marathonQuestionWord.classList.toggle('is-cn-prompt', isZh2en);
+    el.marathonQuestionWord.classList.toggle('is-listen', isListen);
+    el.marathonWordText.textContent = isListen ? '' : question.prompt || question.word || '';
+    state.speechWord = isListen || question.type === 'en2zh' ? question.word : '';
+    el.marathonSpeakBtn.hidden = !state.speechWord;
+    if (state.speechWord) preloadWord(state.speechWord);
+
+    el.marathonOptions.replaceChildren();
+    question.options.forEach((text, index) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'option';
+      button.dataset.index = String(index);
+
+      const key = document.createElement('span');
+      key.className = 'option-key';
+      key.textContent = LETTERS[index] || String(index + 1);
+
+      const label = document.createElement('span');
+      label.className = 'option-text';
+      label.textContent = text;
+
+      button.append(key, label);
+      button.addEventListener('click', () => answerMarathon(index));
+      el.marathonOptions.append(button);
+    });
+
+    state.marathon.current = question;
+    state.marathon.busy = false;
+    setMarathonFeedback('', '');
+
+    if (isListen) {
+      scheduleAutoSpeak(question.word, () => state.marathon.current === question);
+    }
+  }
+
+  async function openMarathon() {
+    if (!state.socket || !state.socket.connected) {
+      showToast('尚未连接服务器，请稍候再试', 'error');
+      return;
+    }
+    clearMarathonTimer();
+
+    const response = await request('marathon:start', { deviceToken: deviceToken() }, 10000);
+    if (!response.ok) {
+      showToast(response.error || '无法开始超长闯关', 'error');
+      return;
+    }
+
+    state.marathon.active = true;
+    state.marathon.busy = false;
+    state.marathon.total = response.total || 0;
+    el.marathonSummary.hidden = true;
+    el.marathonPlay.hidden = false;
+    renderMarathonStats(response);
+    setView('marathon');
+
+    if (response.completed) {
+      finishMarathon(response);
+      return;
+    }
+    renderMarathonQuestion(response.question);
+  }
+
+  async function answerMarathon(index) {
+    const marathon = state.marathon;
+    if (!marathon.active || marathon.busy || !marathon.current) return;
+    marathon.busy = true;
+
+    const question = marathon.current;
+    [...el.marathonOptions.children].forEach((button) => {
+      button.disabled = true;
+      button.classList.add('is-locked');
+    });
+
+    const response = await request('marathon:answer', { index }, 10000);
+    if (!response.ok) {
+      marathon.busy = false;
+      [...el.marathonOptions.children].forEach((button) => {
+        button.disabled = false;
+        button.classList.remove('is-locked');
+      });
+      showToast(response.error || '提交失败，请重试', 'error');
+      return;
+    }
+
+    // 服务端只在作答后下发 correctIndex；缺字段时用正确答案文本兜底定位。
+    const correctIndex = Number.isInteger(response.correctIndex)
+      ? response.correctIndex
+      : question.options.indexOf(response.correctText);
+
+    [...el.marathonOptions.children].forEach((button, optionIndex) => {
+      button.classList.add('is-locked');
+      if (optionIndex === correctIndex) {
+        button.classList.add('is-correct');
+      } else if (optionIndex === index) {
+        button.classList.add('is-wrong');
+      } else {
+        button.classList.add('is-dimmed');
+      }
+    });
+
+    if (question.type === 'listen') {
+      renderAnswerReveal(
+        el.marathonReveal,
+        response.word || question.word,
+        response.meanings
+      );
+    }
+
+    if (response.correct) {
+      setMarathonFeedback('✅ 答对了', 'correct');
+    } else {
+      setMarathonFeedback(`❌ 答错了，正确答案是「${response.correctText}」`, 'wrong');
+    }
+    renderMarathonStats(response);
+
+    // 答对节奏快一点，答错留足时间看正确答案。
+    clearMarathonTimer();
+    marathon.nextTimer = window.setTimeout(() => {
+      marathon.nextTimer = null;
+      if (!marathon.active) return;
+      if (response.completed) {
+        finishMarathon(response);
+        return;
+      }
+      renderMarathonQuestion(response.question);
+    }, response.correct ? 800 : 1500);
+  }
+
+  function finishMarathon(payload) {
+    const round = Number(payload && payload.round) || state.marathon.round;
+    state.marathon.active = false;
+    state.marathon.busy = false;
+    state.marathon.current = null;
+    clearMarathonTimer();
+    stopSpeech();
+
+    el.marathonPlay.hidden = true;
+    el.marathonSummary.hidden = false;
+    el.marathonSummaryTitle.textContent = '通关！';
+    el.marathonSummaryCopy.textContent = `第 ${round} 轮全部答对，错词池已清空。干得漂亮！`;
+    renderMarathonStats({ round, remaining: 0, wrongPoolSize: 0 });
+  }
+
+  function exitMarathon() {
+    state.marathon.active = false;
+    state.marathon.busy = false;
+    state.marathon.current = null;
+    clearMarathonTimer();
+    stopSpeech();
+    setView('home');
+  }
+
+  async function resetMarathon() {
+    if (!state.socket || !state.socket.connected) {
+      showToast('尚未连接服务器，请稍候再试', 'error');
+      return;
+    }
+    const confirmed = window.confirm(
+      '确定要重置超长闯关进度吗？\n\n当前轮次、答题进度和错词池都会清空，且无法恢复。'
+    );
+    if (!confirmed) return;
+
+    const response = await request('marathon:reset', { deviceToken: deviceToken() }, 10000);
+    if (!response.ok) {
+      showToast(response.error || '重置失败，请重试', 'error');
+      return;
+    }
+    showToast('进度已重置', 'success');
+    exitMarathon();
+    await openMarathon();
+  }
+
+  async function restartMarathon() {
+    // 通关后「重新开始」：先清掉已完成标记，再重新发牌。
+    const reset = await request('marathon:reset', { deviceToken: deviceToken() }, 10000);
+    if (!reset.ok) {
+      showToast(reset.error || '重置失败，请重试', 'error');
+      return;
+    }
+    await openMarathon();
   }
 
   function startCountdown(deadline, serverNow) {
