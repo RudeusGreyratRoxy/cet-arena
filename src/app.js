@@ -1564,6 +1564,16 @@ function createArenaServer(options = {}) {
     }
 
     on('marathon:start', (payload, ack) => {
+      // 超长闯关为 VIP 专属：未激活的连接在**创建进度之前**就拦下，
+      // 保证免费用户拿不到题目、也不会在磁盘上留下进度记录。
+      if (config.vipRequired && socket.data.vip !== true) {
+        ack({
+          ok: false,
+          error: '超长闯关为 VIP 专属模式，请先解锁 VIP',
+          code: 'VIP_REQUIRED',
+        });
+        return;
+      }
       const deviceToken = normalizeDeviceToken(payload && payload.deviceToken);
       if (!deviceToken) {
         ack({ ok: false, code: 'DEVICE_REQUIRED', error: '设备标识缺失，请刷新页面后重试' });

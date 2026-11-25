@@ -9,7 +9,7 @@
     device: 'cetArena.deviceToken.v1',
     announcement: 'cetArena.announcementSeen.v1',
   };
-  const APP_VERSION = '20261125-vip20';
+  const APP_VERSION = '20261125-vip21';
 
   const VIEW_IDS = ['loading', 'home', 'room', 'game', 'result', 'solo', 'levels', 'trial', 'marathon'];
 
@@ -861,7 +861,13 @@
   /** mode: 'create' 建房 / 'join' 加入 / 'wrong' 错词挑战，验证成功后回到对应动作。 */
   function openVipModal(mode) {
     state.vip.pending =
-      mode === 'join' ? 'join' : mode === 'wrong' ? 'wrong' : 'create';
+      mode === 'join'
+        ? 'join'
+        : mode === 'wrong'
+          ? 'wrong'
+          : mode === 'marathon'
+            ? 'marathon'
+            : 'create';
     el.vipOverlay.hidden = false;
     showVipStep('code');
     showVipError('');
@@ -916,6 +922,7 @@
     if (pending === 'create') createRoom();
     else if (pending === 'join') joinRoom();
     else if (pending === 'wrong') startWrongChallenge();
+    else if (pending === 'marathon') openMarathon();
   }
 
   function showPayMaintenanceNotice() {
@@ -2815,6 +2822,17 @@
       el.wrongChallengeBtn.classList.toggle('is-vip-locked', locked);
       el.wrongChallengeBtn.setAttribute('aria-disabled', String(locked));
     }
+
+    // 超长闯关同样改为 VIP 专属：入口卡片跟着 VIP 状态显示锁定态。
+    if (el.marathonEntryBtn) {
+      el.marathonEntryBtn.classList.toggle('is-vip-locked', locked);
+      el.marathonEntryBtn.setAttribute('aria-disabled', String(locked));
+    }
+    if (el.marathonEntryHint) {
+      el.marathonEntryHint.textContent = locked
+        ? 'VIP 专属 · 激活后可用'
+        : '答完整轮 · 错词自动重来';
+    }
   }
 
   /**
@@ -3493,6 +3511,12 @@
   }
 
   async function openMarathon() {
+    // 超长闯关为 VIP 专属：未激活时先引导激活，不进入答题视图。
+    if (!state.vip.verified) {
+      showToast('超长闯关为 VIP 专属模式，请先解锁 VIP', 'info');
+      openVipModal('marathon');
+      return;
+    }
     if (!state.socket || !state.socket.connected) {
       showToast('尚未连接服务器，请稍候再试', 'error');
       return;
@@ -3501,6 +3525,14 @@
 
     const response = await request('marathon:start', { deviceToken: deviceToken() }, 10000);
     if (!response.ok) {
+      // 后端兜底：本地以为已激活但服务端不认（例如刚被站长解绑）。
+      if (response.code === 'VIP_REQUIRED') {
+        state.vip.verified = false;
+        showToast('超长闯关为 VIP 专属模式，请先解锁 VIP', 'info');
+        if (state.currentView === 'marathon') setView('home');
+        openVipModal('marathon');
+        return;
+      }
       showToast(response.error || '无法开始超长闯关', 'error');
       return;
     }
@@ -3538,6 +3570,14 @@
         button.disabled = false;
         button.classList.remove('is-locked');
       });
+      // VIP 被撤销/过期：直接退回首页并引导重新激活，避免卡在半局。
+      if (response.code === 'VIP_REQUIRED') {
+        state.vip.verified = false;
+        exitMarathon();
+        showToast('VIP 授权已失效，请重新解锁后继续', 'error');
+        openVipModal('marathon');
+        return;
+      }
       showToast(response.error || '提交失败，请重试', 'error');
       return;
     }

@@ -28,6 +28,9 @@ const { APP_VERSION } = require('../src/version');
 
 const DEVICE = 'marathon-device-0001';
 
+// 专属码改为环境变量注入：本文件用它验证「激活后可以进超长闯关」。
+process.env.VIP_UNLIMITED_CODES = 'TESTBOSS1';
+
 let passed = 0;
 function ok(label, condition, detail) {
   assert.ok(condition, detail === undefined ? label : `${label}（实际：${detail}）`);
@@ -307,6 +310,54 @@ async function testRoundSwitchOverSocket(dir) {
   await arena.close();
 }
 
+/**
+ * VIP 闸门：vipRequired 开启时，未激活连接必须被拒绝，且**不产生进度**；
+ * 用环境变量注入的专属码激活后，同一连接可以正常开始。
+ */
+async function testVipGate(dir) {
+  console.log('=== 8. VIP 闸门 ===');
+  const vipDir = path.join(dir, 'vip-gate');
+  fs.mkdirSync(vipDir, { recursive: true });
+  fs.writeFileSync(path.join(vipDir, 'vip_codes.json'), JSON.stringify({ version: 1, codes: {} }));
+  const progressFile = path.join(dir, 'progress-vip.json');
+
+  const arena = createArenaServer({
+    vipRequired: true,
+    vipOptions: {
+      seedPath: path.join(vipDir, 'vip_codes.json'),
+      statePath: path.join(vipDir, 'state.json'),
+    },
+    messageOptions: { file: path.join(dir, 'messages-vip.json'), minIntervalMs: 0 },
+    marathonOptions: { file: progressFile },
+  });
+  await new Promise((resolve) => arena.httpServer.listen(0, '127.0.0.1', resolve));
+  const base = `http://127.0.0.1:${arena.httpServer.address().port}`;
+  const socket = await connect(base);
+
+  const denied = await call(socket, 'marathon:start', { deviceToken: DEVICE });
+  ok('非 VIP 调用 marathon:start 被拒', denied.ok === false && denied.code === 'VIP_REQUIRED');
+  ok('被拒时提示为 VIP 专属', String(denied.error || '').includes('VIP 专属'));
+  ok('被拒时不返回题目', !denied.question);
+  ok('被拒时未落盘进度文件', fs.existsSync(progressFile) === false);
+  ok(
+    '被拒时也没有内存/落盘进度',
+    createMarathonStore({ file: progressFile }).getProgress(
+      crypto.createHash('sha256').update(DEVICE).digest('hex')
+    ) === null
+  );
+
+  const activated = await call(socket, 'vip:verify', { code: 'TESTBOSS1', deviceToken: DEVICE });
+  ok('专属码激活成功', activated.ok === true, JSON.stringify(activated));
+
+  const started = await call(socket, 'marathon:start', { deviceToken: DEVICE });
+  ok('激活后可以开始超长闯关', started.ok === true && started.round === 1);
+  ok('激活后正常下发题目', started.question && started.question.options.length === 4);
+  ok('激活后进度已落盘', fs.existsSync(progressFile) === true);
+
+  socket.close();
+  await arena.close();
+}
+
 async function main() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cet-marathon-'));
   try {
@@ -315,6 +366,7 @@ async function main() {
     testStore(dir);
     await testSocket(dir);
     await testRoundSwitchOverSocket(dir);
+    await testVipGate(dir);
     console.log('');
     console.log(`超长闯关测试全部通过（${passed} 项断言）。`);
   } finally {
