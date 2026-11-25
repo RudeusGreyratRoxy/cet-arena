@@ -7,6 +7,7 @@
 > 强制格式（最新在最上）：`[YYYY-MM-DD HH:mm] 版本号 | 核心改动 | 遗留问题`
 > 每次任务结束**必须**在此节点顶部新增一行，无需用户提醒。
 
+- [2026-11-25 18:13] `20261125-vip20` | **新玩法：超长闯关（marathon）上线**。后端：`src/marathon.js`（进度存储 + 纯函数 `applyAnswer`/`normalizeProgress`）+ `src/app.js` 三个事件 `marathon:start/answer/reset`，按 `deviceHash` 落 `data/marathon_progress.json`（gitignore），只存词 ID 不存答案。前端：首页入口 + `#view-marathon`（轮次/剩余/错词池三项统计、复用题目卡片、答对 0.8s / 答错 1.5s 自动下一题、通关结算、重置二次确认）。测试：`test/marathon.test.js` 50 项断言，测试链 **16 → 17 套全绿**。部署：安全重启 `restarts 30 → 31`、env 长度 11/27 一致、`/healthz` 返回 `20261125-vip20`；线上端到端实测 start/answer/reset 全部通过，且 `git ls-files data/marathon_progress.json` 为 0 | 无
 - [2026-11-18 21:16] `20261118-vip19` | 修复房间界面硬编码「200 词」：`roomView()` 新增 `wordCount`（启动时按 level 预统计，CET4=2868，CET6 将来自动生效），`public/app.js` 四处文案改动态拼接并保留「取不到则降级」分支，`index.html` 初始占位去掉数字；`APP_VERSION` 与 `index.html` 三处 `?v=` → `20261118-vip19`（admin 不动，仍 `20261114-vip18`）；16 套全绿；已部署：安全重启 `restarts 29 → 30`、`ADMIN_PASSWORD` len=11 / `VIP_UNLIMITED_CODES` len=27 前后一致、healthz 返回 vip19、端到端建房间实测 `room.wordCount = 2868` | 无
 - [2026-11-18 20:30] `20261112-vip18`（版本不变·纯文档） | 待办补登「messages 同毫秒排序 tie-breaker」：记录 `byNewestFirst` 只比 `createdAt`、同毫秒排序未定义，当前由 `test/messages.test.js` 注入可控时钟规避，生产 5 秒冷却下几乎不触发，优先级低；若确定化需同时改 `list()` 与 `listByDevice()` | 无
 - [2026-11-17 21:08] `20261112-vip18`（版本不变·纯测试与文档） | 新增 `test/device-token.test.js`（**27 项断言**）并接入 `npm test`，锁住当前设备 Token **明文存储**行为：首次绑定 `boundDevice` 等于传入 token、同设备放行、换设备 `BOUND`、`reset` 后原设备 `REVOKED` 且不影响其他码、`allowRebind` 后新设备可绑且旧设备入 `revokedDevices`、黑名单拦截、`reset()` 返回 `previousDevice`（踢线依赖）与未绑定码不返回；测试链 **15 → 16 套全绿（16/16）**；README 同步（§3 十六套 + 新条目、§6 结构树、§8 验收项）；未改 `src/`、`data/`，未重启 | 设备 Token 哈希化时本套件会成批失败，按新语义改写即可（刻意设计成绊线）
@@ -51,6 +52,12 @@
 
 ## 当前进度
 
+- **【新玩法 · 已上线】超长闯关（marathon，版本 `20261125-vip20`，2026-11-25）**：
+  - **玩法**：首页「超长闯关」→ `#view-marathon`。首轮把全量词库（2868 词）洗牌成答题队列；答对进入下一题，**答错也进入下一题但该词进错词池**；队列答完时错词池非空 → 洗牌成新一轮，为空 → 通关。
+  - **后端**：`src/marathon.js` 管理进度（`getProgress` / `saveProgress` / `reset`，原子写），轮次推进抽成纯函数 `applyAnswer()`（答错入池去重、队列走完切轮/通关），另有 `normalizeProgress()` 处理词库缩水/下标越界自愈。`src/app.js` 新增 `marathon:start` / `marathon:answer` / `marathon:reset`；进度按 `sha256(deviceToken)` 归属，落 `data/marathon_progress.json`（已 gitignore），**只存词 ID 与轮次/下标，不存题目与答案**，`correctIndex` 仅在作答 ack 下发。
+  - **前端**：`public/app.js` 新增 marathon 控制组（`openMarathon` / `renderMarathonQuestion` / `answerMarathon` / `finishMarathon` / `resetMarathon` / `restartMarathon`），复用题目卡片与选项样式；答对 0.8s、答错 1.5s 后自动下一题；答错标红并高亮正确项；顶部三项统计（轮次 / 本轮剩余 / 错词池）；重置走 `window.confirm` 二次确认。
+  - **版本**：`APP_VERSION → 20261125-vip20`（`src/version.js` 与 `public/app.js` 同值），`index.html` 三处 `?v=` 同步；`admin.html` 未动（仍 `20261114-vip18`）。
+  - **测试**：新增 `test/marathon.test.js`（50 项断言），测试链 **16 → 17 套全绿**。
 - **【测试基线】设备 Token 明文行为已锁死（2026-11-17，版本不变）**：新增 `test/device-token.test.js`（**27 项断言**，已接入 `npm test`），把当前「`boundDevice` / `revokedDevices` 存原始 token 明文、直接 `===` 比较」的行为固化为回归：首次绑定明文写入、同设备复用、换设备 `BOUND`、`reset` 封禁后原设备 `REVOKED` 且不影响其他码、`allowRebind` 后新设备可绑且旧设备进黑名单、`revokedDevices` 拦截、`reset` 返回 `previousDevice`（在线踢线依赖）与未绑定码不返回。其中**刻意断言 `boundDevice` 不是 64 位 sha256**——将来做设备 Token 哈希化时本套件会成批失败，作为改造信号，避免「改了存储格式却没人发现旧数据全被判 `BOUND`」。测试链 **16 套全绿**。
 - **【新功能 · 已上线】留言回复（版本 `20261112-vip18`，2026-11-14）**：
   - **数据层**：`src/messages.js` 记录新增 `reply` / `repliedAt`（默认 `null`，`version` 仍 1；当时 `messages.json` 为 0 条记录，无需迁移）。新增 `reply(id, text)`：`cleanContent` 后按码点 ≤ **100 字**，空回复 `EMPTY_REPLY`、超长 `REPLY_TOO_LONG`、id 不存在 `NOT_FOUND`；写入回复的**同时**把 `status` 置 `handled` 并补 `handledAt`——回复即处理，额度立刻归还。新增 `listByDevice(deviceHash)`（倒序，空哈希返回空数组）。
@@ -100,10 +107,11 @@
 
 ## 线上版本
 
-- 服务版本：`20261118-vip19`，`GET /healthz` 实测 `{"ok":true,"rooms":0,"players":0,"words":2868,"version":"20261118-vip19"}`；PM2 进程 online、**restarts 30**、2026-11-18 21:15 因「词库显示修复」部署重启（此前 29 是 11-18 20:12 的设备 Token 哈希化上线）
-- 服务器代码提交：`7c9779f fix: 房间词库显示真实词数，后端下发wordCount并移除硬编码200词(vip19)`
-- 服务器 HEAD：与本地一致（该提交改 `src/` 与 `public/`，**必须重启才生效，已显式回注环境变量重启**；只改 README/HANDOFF 的文档提交则 `git pull` 即可，不需要 `pm2 restart`）
-- 前端版本号：本地 `20261118-vip19` / 线上 `20261118-vip19`（已同步）；`index.html` 三处 `?v=` 为 `20261118-vip19`，`admin.html` 两处 `?v=` 为 `20261114-vip18`（admin 不参与 `APP_VERSION`）
+- 服务版本：`20261125-vip20`，`GET /healthz` 实测 `{"ok":true,"rooms":0,"players":0,"words":2868,"version":"20261125-vip20"}`；PM2 进程 online、**restarts 31**、2026-11-25 18:12 因「超长闯关上线」部署重启（此前 30 是 11-18 21:15 的词库显示修复）
+- 服务器代码提交：`f093671 feat: 新增超长闯关marathon模式(前端+后端)，版本vip20`
+- 服务器 HEAD：与本地一致（该提交改 `src/`、`public/` 与 `README`，**必须重启才生效，已显式回注环境变量重启**；只改 README/HANDOFF 的文档提交则 `git pull` 即可，不需要 `pm2 restart`）
+- 前端版本号：本地 `20261125-vip20` / 线上 `20261125-vip20`（已同步）；`index.html` 三处 `?v=` 为 `20261125-vip20`，`admin.html` 两处 `?v=` 为 `20261114-vip18`（admin 不参与 `APP_VERSION`）
+- 超长闯关：首页新增「超长闯关」入口 → `#view-marathon`。首轮全量词库洗牌，答错进错词池，队列答完自动切轮，错词池清空即通关；进度按 `deviceHash` 落 `data/marathon_progress.json`（**已 gitignore，实测 `git ls-files` 为 0**），重置需二次确认。线上实测：`marathon:start` 返回 `round=1 / total=2868 / 4 选项 / 不含 correctIndex`，`marathon:answer` 返回 `meanings` 且推进到 `index=1, remaining=2867`，`marathon:reset` 清空成功
 - 词库显示：房间界面不再硬编码「200 词」。`roomView()` 按 `room.level` 下发 `wordCount`（启动时预统计，CET4=2868，CET6 建好后自动生效），前端 `shareLevel` 与 `levelHint` 动态拼接，取不到时降级为「当前词库：CET-4 核心」；`index.html` 初始占位也已去掉数字。实测建房间返回 `room.wordCount = 2868`
 - 环境变量：重启前后 `ADMIN_PASSWORD` len=11、`VIP_UNLIMITED_CODES` len=27，长度一致
 - 地址：<http://1.15.152.160:3000>　后台：<http://1.15.152.160:3000/admin>
