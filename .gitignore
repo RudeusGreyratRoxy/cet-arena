@@ -21,6 +21,9 @@ data/messages.json
 # 首页公告（站长后台发布，属运行时状态，入库会造成 pull 冲突）
 data/announcement.json
 
+# 超长闯关进度（按 deviceHash 保存答题队列/错词池），只在服务器本地保存
+data/marathon_progress.json
+
 # 测试用临时目录
 test/.tmp-*
 

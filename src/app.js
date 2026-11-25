@@ -6,12 +6,13 @@ const crypto = require('crypto');
 const express = require('express');
 const compression = require('compression');
 const { Server } = require('socket.io');
-const { loadWords, buildQuestions, buildQuestion } = require('./wordBank');
+const { loadWords, buildQuestions, buildQuestion, shuffle } = require('./wordBank');
 const { createVipStore, normalizeDeviceToken, deviceMatches } = require('./vipCodes');
 const { createAdminAuth } = require('./adminAuth');
 const { createMessageStore, MAX_CONTENT } = require('./messages');
 const { createAnnouncementStore } = require('./announcement');
 const { createLevelStore } = require('./levels');
+const { createMarathonStore, applyAnswer, normalizeProgress } = require('./marathon');
 const { APP_VERSION } = require('./version');
 
 const DEFAULT_CONFIG = {
@@ -61,11 +62,17 @@ function createArenaServer(options = {}) {
     acc[entry.level] = (acc[entry.level] || 0) + 1;
     return acc;
   }, {});
+
+  /** 设备 Token → 稳定哈希，作为「按设备」数据的归属键（留言配额、超长闯关进度）。 */
+  function deviceHashOf(token) {
+    return crypto.createHash('sha256').update(String(token)).digest('hex');
+  }
   const vip = options.vip || createVipStore(options.vipOptions);
   const messages = options.messages || createMessageStore(options.messageOptions);
   const announcement =
     options.announcementStore || createAnnouncementStore(options.announcementOptions);
   const levels = options.levels || createLevelStore({ words });
+  const marathon = options.marathonStore || createMarathonStore(options.marathonOptions);
   const app = express();
   const httpServer = http.createServer(app);
   const io = new Server(httpServer, {
@@ -1505,6 +1512,189 @@ function createArenaServer(options = {}) {
       ack({ ok: true });
     });
 
+    // ----------------------------------------------------------------
+    // 超长闯关（marathon）：按设备持久化的「无限轮次」模式。
+    // 进度落 data/marathon_progress.json（gitignore），只存词 ID 队列，不存答案。
+    // ----------------------------------------------------------------
+
+    /** 按进度里的「当前词 ID」现场生成一道题（干扰项来自全量词库）。 */
+    function marathonQuestionFor(progress) {
+      const wordId = progress.queue[progress.index];
+      if (!wordId) return null;
+      const entry = wordById.get(wordId);
+      if (!entry) return null;
+      return buildQuestion(entry, words, randomSoloType());
+    }
+
+    /** 下发用的题目视图：**不含 correctIndex**，作答后 ack 才回答案。 */
+    function marathonQuestionView(question) {
+      if (!question) return null;
+      return {
+        id: question.id,
+        word: question.word,
+        level: question.level,
+        type: question.type,
+        prompt: question.prompt,
+        promptLabel: question.promptLabel,
+        options: question.options,
+      };
+    }
+
+    function marathonSnapshot(progress, question) {
+      return {
+        ok: true,
+        round: progress.round,
+        total: progress.queue.length,
+        index: progress.index,
+        remaining: Math.max(0, progress.queue.length - progress.index),
+        wrongPoolSize: progress.wrongPool.length,
+        completed: Boolean(progress.completed),
+        question: progress.completed ? null : marathonQuestionView(question),
+      };
+    }
+
+    /** 词库变更后的自愈：丢掉不存在/重复的词 ID，必要时推进轮次。 */
+    function sanitizeMarathonProgress(progress) {
+      const known = {
+        ...progress,
+        queue: progress.queue.filter((id) => wordById.has(id)),
+        wrongPool: progress.wrongPool.filter((id) => wordById.has(id)),
+      };
+      return normalizeProgress(known);
+    }
+
+    on('marathon:start', (payload, ack) => {
+      const deviceToken = normalizeDeviceToken(payload && payload.deviceToken);
+      if (!deviceToken) {
+        ack({ ok: false, code: 'DEVICE_REQUIRED', error: '设备标识缺失，请刷新页面后重试' });
+        return;
+      }
+      const deviceHash = deviceHashOf(deviceToken);
+
+      let progress = marathon.getProgress(deviceHash);
+      if (!progress) {
+        progress = marathon.saveProgress(deviceHash, {
+          round: 1,
+          index: 0,
+          queue: shuffle(words.map((entry) => entry.id)),
+          wrongPool: [],
+          completed: false,
+        });
+      } else {
+        // 词库可能变过，先自愈再判断是否需要回写。
+        const healed = sanitizeMarathonProgress(progress);
+        const changed =
+          healed.queue.length !== progress.queue.length ||
+          healed.wrongPool.length !== progress.wrongPool.length ||
+          healed.round !== progress.round ||
+          healed.index !== progress.index ||
+          healed.completed !== progress.completed;
+        if (changed) progress = marathon.saveProgress(deviceHash, healed);
+      }
+
+      if (progress.completed) {
+        socket.data.marathon = { deviceHash, progress, pending: null };
+        ack(marathonSnapshot(progress, null));
+        return;
+      }
+
+      if (!progress.queue.length) {
+        // 理论上只在词库为空时出现，给个明确错误而不是静默卡死。
+        ack({ ok: false, error: '词库为空，无法开始超长闯关' });
+        return;
+      }
+
+      const question = marathonQuestionFor(progress);
+      if (!question) {
+        ack({ ok: false, error: '题目生成失败，请重置进度后重试' });
+        return;
+      }
+      socket.data.marathon = { deviceHash, progress, pending: question };
+      ack(marathonSnapshot(progress, question));
+    });
+
+    on('marathon:answer', (payload, ack) => {
+      const session = socket.data.marathon;
+      const question = session && session.pending;
+      if (!question) {
+        ack({ ok: false, error: '请先开始超长闯关' });
+        return;
+      }
+      const optionIndex = Number(payload && payload.index);
+      if (!Number.isInteger(optionIndex) || optionIndex < 0 || optionIndex >= question.options.length) {
+        ack({ ok: false, error: '选项无效' });
+        return;
+      }
+
+      const correct = optionIndex === question.correctIndex;
+      const advanced = applyAnswer(session.progress, question.id, correct);
+      const saved = marathon.saveProgress(session.deviceHash, {
+        ...advanced,
+        startedAt: session.progress.startedAt,
+      });
+      session.progress = saved;
+
+      if (saved.completed) {
+        session.pending = null;
+        audit('marathon_complete', {
+          device: session.deviceHash.slice(0, 8),
+          rounds: saved.round,
+          ok: true,
+        });
+        ack({
+          ok: true,
+          correct,
+          correctIndex: question.correctIndex,
+          correctText: question.correctText,
+          word: question.word,
+          type: question.type,
+          round: saved.round,
+          total: saved.queue.length,
+          index: saved.index,
+          remaining: 0,
+          wrongPoolSize: 0,
+          completed: true,
+          roundChanged: Boolean(advanced.roundChanged),
+          question: null,
+        });
+        return;
+      }
+
+      const next = marathonQuestionFor(saved);
+      session.pending = next;
+      ack({
+        ok: true,
+        correct,
+        correctIndex: question.correctIndex,
+        correctText: question.correctText,
+        word: question.word,
+        type: question.type,
+        round: saved.round,
+        total: saved.queue.length,
+        index: saved.index,
+        remaining: Math.max(0, saved.queue.length - saved.index),
+        wrongPoolSize: saved.wrongPool.length,
+        completed: false,
+        roundChanged: Boolean(advanced.roundChanged),
+        question: marathonQuestionView(next),
+      });
+    });
+
+    on('marathon:reset', (payload, ack) => {
+      const deviceToken = normalizeDeviceToken(payload && payload.deviceToken);
+      if (!deviceToken) {
+        ack({ ok: false, code: 'DEVICE_REQUIRED', error: '设备标识缺失，请刷新页面后重试' });
+        return;
+      }
+      const deviceHash = deviceHashOf(deviceToken);
+      const result = marathon.reset(deviceHash);
+      if (socket.data.marathon && socket.data.marathon.deviceHash === deviceHash) {
+        socket.data.marathon = null;
+      }
+      audit('marathon_reset', { device: deviceHash.slice(0, 8), removed: result.removed, ok: true });
+      ack({ ok: true, removed: result.removed, message: '进度已重置' });
+    });
+
     on('vip:verify', (payload, ack) => {
       const ip = clientIp(socket);
       const deviceToken = payload && payload.deviceToken;
@@ -1573,7 +1763,7 @@ function createArenaServer(options = {}) {
         ack({ ok: false, error: '设备标识缺失，请刷新页面后重试', code: 'DEVICE_REQUIRED' });
         return;
       }
-      const deviceHash = crypto.createHash('sha256').update(deviceToken).digest('hex');
+      const deviceHash = deviceHashOf(deviceToken);
       const mine = messages.listByDevice(deviceHash).map((item) => ({
         id: item.id,
         content: item.content,
