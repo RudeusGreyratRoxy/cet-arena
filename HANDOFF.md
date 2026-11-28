@@ -7,6 +7,7 @@
 > 强制格式（最新在最上）：`[YYYY-MM-DD HH:mm] 版本号 | 核心改动 | 遗留问题`
 > 每次任务结束**必须**在此节点顶部新增一行，无需用户提醒。
 
+- [2026-11-28 20:36] `20261128-vip22` | **非 VIP 每日免费双人体验上线**。新增 `src/dailyLimits.js`（`checkAndConsume` / `getRemaining` / `dayKey`，本地日期跨天重置、查询不落盘）落 `data/daily_limits.json`（gitignore）；后端 `room:create`/`room:join` 改为「VIP 直接放行不扣次数；非 VIP 按 `deviceHash` 扣每日 2 次」，**参数校验通过后才扣**（昵称非法/房间不存在/房间已满不消耗），成功 ack 带 `isFreeAttempt` + `freeRemaining`，耗尽返回 `FREE_LIMIT_REACHED`；前端移除本地 VIP 拦截，改为 toast 剩余次数 / 弹激活码遮罩；测试：`vip.test` 增至 94 项断言（免费 2 次、第 3 次拒绝、VIP 不扣额度、失败路径不扣），`dailyLimits.test` 28 项，`solo-ui`/`admin`/`marathon` 相应更新，**18 套全绿**；部署 `restarts 32 → 33`、env 长度 11/27 一致、healthz 返回 vip22 | 探针配额已清理
 - [2026-11-25 20:01] `20261125-vip21` | 超长闯关改为 **VIP 专属**：后端 `marathon:start` 在 `config.vipRequired` 且 `socket.data.vip !== true` 时返回 `VIP_REQUIRED`，**在创建进度之前拦截**；前端入口卡片跟随 VIP 状态显示锁定态、点击弹激活码遮罩（`openVipModal('marathon')`，激活后自动续跑），并对 `answer` 的 `VIP_REQUIRED` 做兜底（退回首页 + 重新引导激活）；`test/marathon.test.js` 新增 9 项断言（非 VIP 被拒、无题目、无进度文件/记录、激活后可开始），测试链 **17 套全绿**；版本 `vip20 → vip21`；已部署：`restarts 31 → 32`、env 长度 11/27 一致、healthz 返回 vip21，线上非 VIP 探针实测 `VIP_REQUIRED` 且未新增进度 | 线上存在 1 条 18:38（免费期）产生的真实玩家进度（第 1 轮第 5 题、错词 1），该玩家若非 VIP 将无法继续，待确认是否保留
 - [2026-11-25 18:13] `20261125-vip20` | **新玩法：超长闯关（marathon）上线**。后端：`src/marathon.js`（进度存储 + 纯函数 `applyAnswer`/`normalizeProgress`）+ `src/app.js` 三个事件 `marathon:start/answer/reset`，按 `deviceHash` 落 `data/marathon_progress.json`（gitignore），只存词 ID 不存答案。前端：首页入口 + `#view-marathon`（轮次/剩余/错词池三项统计、复用题目卡片、答对 0.8s / 答错 1.5s 自动下一题、通关结算、重置二次确认）。测试：`test/marathon.test.js` 50 项断言，测试链 **16 → 17 套全绿**。部署：安全重启 `restarts 30 → 31`、env 长度 11/27 一致、`/healthz` 返回 `20261125-vip20`；线上端到端实测 start/answer/reset 全部通过，且 `git ls-files data/marathon_progress.json` 为 0 | 无
 - [2026-11-18 21:16] `20261118-vip19` | 修复房间界面硬编码「200 词」：`roomView()` 新增 `wordCount`（启动时按 level 预统计，CET4=2868，CET6 将来自动生效），`public/app.js` 四处文案改动态拼接并保留「取不到则降级」分支，`index.html` 初始占位去掉数字；`APP_VERSION` 与 `index.html` 三处 `?v=` → `20261118-vip19`（admin 不动，仍 `20261114-vip18`）；16 套全绿；已部署：安全重启 `restarts 29 → 30`、`ADMIN_PASSWORD` len=11 / `VIP_UNLIMITED_CODES` len=27 前后一致、healthz 返回 vip19、端到端建房间实测 `room.wordCount = 2868` | 无
@@ -53,7 +54,12 @@
 
 ## 当前进度
 
-- **【新玩法 · 已上线】超长闯关（marathon，版本 `20261125-vip20`，2026-11-25）**：
+- **【拉新 · 已上线】非 VIP 每日免费双人体验（版本 `20261128-vip22`，2026-11-28）**：
+  - **规则**：非 VIP 每人每天 2 次进场——房主「创建房间」、玩家「加入房间」各扣 1 次；额度耗尽直接拒绝（`FREE_LIMIT_REACHED`），前端 toast 后端文案并弹激活码遮罩。VIP 放行且不扣次数。
+  - **后端**：`src/dailyLimits.js` 按 `deviceHash = sha256(deviceToken)` 记 `{ day, used }`，落 `data/daily_limits.json`（gitignore）。`checkAndConsume()` 用**本地日期**（`getFullYear/getMonth/getDate`，严禁 `toISOString`，避免 UTC+8 凌晨错位）跨天重置；`used >= 2` 返回 `LIMIT` 且不写盘；`getRemaining()` 只读、跨天也不写。接线在 `src/app.js` 的 `consumeEntryQuota()`，于 `room:create`/`room:join` **校验通过后、真正进房前**调用（失败路径不扣次数）；`game:start` 不加拦截。
+  - **前端**：`createRoom()`/`joinRoom()` 移除本地 `state.vip.verified` 拦截，统一交由服务端判定；`FREE_LIMIT_REACHED` → toast + `openVipModal()`；成功且 ack 带 `freeRemaining` → toast「本次为免费体验，今日剩余 X 次」。
+  - **测试**：`test/dailyLimits.test.js`（28 项）+ `test/vip.test.js` 第 10 节扩到 94 项断言（免费 2 次、第 3 次拒、VIP 不扣、失败不扣），`solo-ui`（付费墙改为后端触发）、`admin`（踢线改用 `marathon:start` 验证）、`marathon`（分支断言数对齐）；**18 套全绿**。
+- **【新玩法 · 已上线】超长闯关（marathon，版本 `20261125-vip20` 起，2026-11-25）**：
   - **玩法**：首页「超长闯关」→ `#view-marathon`。首轮把全量词库（2868 词）洗牌成答题队列；答对进入下一题，**答错也进入下一题但该词进错词池**；队列答完时错词池非空 → 洗牌成新一轮，为空 → 通关。
   - **VIP 闸门（2026-11-25 20:00 起）**：该模式为 **VIP 专属**。前端入口卡片跟随 VIP 状态显示「VIP 专属 · 激活后可用」，点击弹激活码遮罩（`openVipModal('marathon')`，激活成功后自动开始）；后端 `marathon:start` 在 `config.vipRequired` 且 `socket.data.vip !== true` 时直接 `VIP_REQUIRED`，**在创建进度之前拦截**（免费用户拿不到题目、也不会在磁盘留下记录）；`marathon:answer` 若返回 `VIP_REQUIRED`（例如刚被解绑），前端退回首页并重新引导激活。
   - **后端**：`src/marathon.js` 管理进度（`getProgress` / `saveProgress` / `reset`，原子写），轮次推进抽成纯函数 `applyAnswer()`（答错入池去重、队列走完切轮/通关），另有 `normalizeProgress()` 处理词库缩水/下标越界自愈。`src/app.js` 新增 `marathon:start` / `marathon:answer` / `marathon:reset`；进度按 `sha256(deviceToken)` 归属，落 `data/marathon_progress.json`（已 gitignore），**只存词 ID 与轮次/下标，不存题目与答案**，`correctIndex` 仅在作答 ack 下发。
@@ -109,10 +115,11 @@
 
 ## 线上版本
 
-- 服务版本：`20261125-vip21`，`GET /healthz` 实测 `{"ok":true,"rooms":0,"players":0,"words":2868,"version":"20261125-vip21"}`；PM2 进程 online、**restarts 32**、2026-11-25 20:00 因「超长闯关改 VIP 专属」部署重启（此前 31 是 18:12 的 marathon 首发上线）
-- 服务器代码提交：`a89b414 feat: 超长闯关改为VIP专属(前后端闸门+测试)，版本vip21`
-- 服务器 HEAD：与本地一致（该提交改 `src/`、`public/`、`test/` 与 `README`，**必须重启才生效，已显式回注环境变量重启**；只改 README/HANDOFF 的文档提交则 `git pull` 即可，不需要 `pm2 restart`）
-- 前端版本号：本地 `20261125-vip21` / 线上 `20261125-vip21`（已同步）；`index.html` 三处 `?v=` 为 `20261125-vip21`，`admin.html` 两处 `?v=` 为 `20261114-vip18`（admin 不参与 `APP_VERSION`）
+- 服务版本：`20261128-vip22`，`GET /healthz` 实测 `{"ok":true,"rooms":0,"players":0,"words":2868,"version":"20261128-vip22"}`；PM2 进程 online、**restarts 33**、2026-11-28 20:34 因「非 VIP 每日免费双人体验」部署重启（此前 32 是 11-25 20:00 的超长闯关改 VIP 专属）
+- 服务器代码提交：`54e3137 feat: 非VIP每日免费双人体验(每日2次)，版本vip22`
+- 服务器 HEAD：与本地一致（该提交改 `src/`、`public/`、`test/`、`README`，**必须重启才生效，已显式回注环境变量重启**；只改 README/HANDOFF 的文档提交则 `git pull` 即可，不需要 `pm2 restart`）
+- 前端版本号：本地 `20261128-vip22` / 线上 `20261128-vip22`（已同步）；`index.html` 三处 `?v=` 为 `20261128-vip22`，`admin.html` 两处 `?v=` 为 `20261114-vip18`（admin 不参与 `APP_VERSION`）
+- 免费体验：非 VIP 每天 2 次进场（建房/加入各扣 1 次），额度按 `deviceHash` + **本地日期**落 `data/daily_limits.json`（已 gitignore，`git ls-files` 实测 0），跨天自动重置；额度耗尽返回 `FREE_LIMIT_REACHED`，前端弹激活码遮罩。线上探针实测：同一设备连续 3 次建房依次为 `ok/freeRemaining=1`、`ok/freeRemaining=0`、`FREE_LIMIT_REACHED`；VIP 建房不返回免费标记、不消耗额度。探针写入的配额记录已即时清除（当前 `devices=0`）
 - 超长闯关：首页新增「超长闯关」入口 → `#view-marathon`，**VIP 专属**（未激活时卡片显示「VIP 专属 · 激活后可用」，点击弹激活码遮罩；服务端 `marathon:start` 返回 `VIP_REQUIRED` 且不落进度）。首轮全量词库洗牌，答错进错词池，队列答完自动切轮，错词池清空即通关；进度按 `deviceHash` 落 `data/marathon_progress.json`（**已 gitignore，实测 `git ls-files` 为 0**），重置需二次确认。线上实测：`marathon:start` 返回 `round=1 / total=2868 / 4 选项 / 不含 correctIndex`，`marathon:answer` 返回 `meanings` 且推进到 `index=1, remaining=2867`，`marathon:reset` 清空成功
 - 词库显示：房间界面不再硬编码「200 词」。`roomView()` 按 `room.level` 下发 `wordCount`（启动时预统计，CET4=2868，CET6 建好后自动生效），前端 `shareLevel` 与 `levelHint` 动态拼接，取不到时降级为「当前词库：CET-4 核心」；`index.html` 初始占位也已去掉数字。实测建房间返回 `room.wordCount = 2868`
 - 环境变量：重启前后 `ADMIN_PASSWORD` len=11、`VIP_UNLIMITED_CODES` len=27，长度一致
