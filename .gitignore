@@ -24,6 +24,9 @@ data/announcement.json
 # 超长闯关进度（按 deviceHash 保存答题队列/错词池），只在服务器本地保存
 data/marathon_progress.json
 
+# 非 VIP 每日免费进场配额（按 deviceHash + 本地日期），只在服务器本地保存
+data/daily_limits.json
+
 # 测试用临时目录
 test/.tmp-*
 

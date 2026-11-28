@@ -663,24 +663,37 @@ async function scenarioSoloWrongColoring() {
 
 async function scenarioVipPaywall() {
   console.log('=== 场景 8：激活码与三档套餐 ===');
+  // 非 VIP 现在不再被前端直接拦截：第一次建房由后端返回「今日免费次数已用完」，
+  // 前端据此弹激活码遮罩；激活成功后再建房（第二次调用）正常进入房间。
+  let createCalls = 0;
   const env = createEnv({
     acks: {
       'vip:verify': () => ({ ok: true, kind: 'once', message: '验证成功' }),
-      'room:create': () => ({
-        ok: true,
-        playerId: 'p1',
-        sessionId: 's1',
-        room: {
-          code: '123456',
-          hostId: 'p1',
-          level: 'CET4',
-          mode: 'quiz',
-          status: 'waiting',
-          maxPlayers: 2,
-          players: [{ id: 'p1', nickname: 'Tester', ready: false, score: 0, connected: true, isHost: true }],
-          game: null,
-        },
-      }),
+      'room:create': () => {
+        createCalls += 1;
+        if (createCalls === 1) {
+          return {
+            ok: false,
+            code: 'FREE_LIMIT_REACHED',
+            error: '今日免费次数已用完，请激活VIP继续体验',
+          };
+        }
+        return {
+          ok: true,
+          playerId: 'p1',
+          sessionId: 's1',
+          room: {
+            code: '123456',
+            hostId: 'p1',
+            level: 'CET4',
+            mode: 'quiz',
+            status: 'waiting',
+            maxPlayers: 2,
+            players: [{ id: 'p1', nickname: 'Tester', ready: false, score: 0, connected: true, isHost: true }],
+            game: null,
+          },
+        };
+      },
     },
   });
   await flush();
@@ -689,10 +702,10 @@ async function scenarioVipPaywall() {
   env.el('createBtn')._fire('click');
   await flush();
 
-  assert.equal(env.el('vipOverlay').hidden, false, '未激活时应弹出 VIP 遮罩');
+  assert.equal(env.el('vipOverlay').hidden, false, '免费次数用尽时应弹出 VIP 遮罩');
   assert.equal(env.el('vipStepCode').hidden, false, '默认显示激活码输入');
   assert.equal(env.el('vipStepPay').hidden, true, '默认不显示套餐页');
-  console.log('  ✓ 点「创建房间」弹出全屏激活码遮罩');
+  console.log('  ✓ 免费次数用尽时点「创建房间」弹出全屏激活码遮罩');
 
   env.el('vipToPayBtn')._fire('click');
   assert.equal(env.el('vipStepPay').hidden, false, '应切到套餐页');
@@ -732,27 +745,38 @@ async function scenarioVipPaywall() {
 
 async function scenarioJoinNeedsCode() {
   console.log('=== 场景 9：加入房间也需要自己的码 ===');
+  let joinCalls = 0;
   const env = createEnv({
     acks: {
       'vip:verify': () => ({ ok: true, kind: 'once', message: '验证成功' }),
-      'room:join': () => ({
-        ok: true,
-        playerId: 'p2',
-        sessionId: 's2',
-        room: {
-          code: '123456',
-          hostId: 'p1',
-          level: 'CET4',
-          mode: 'quiz',
-          status: 'waiting',
-          maxPlayers: 2,
-          players: [
-            { id: 'p1', nickname: '房主', ready: false, score: 0, connected: true, isHost: true },
-            { id: 'p2', nickname: 'Tester', ready: false, score: 0, connected: true, isHost: false },
-          ],
-          game: null,
-        },
-      }),
+      'room:join': () => {
+        joinCalls += 1;
+        if (joinCalls === 1) {
+          return {
+            ok: false,
+            code: 'FREE_LIMIT_REACHED',
+            error: '今日免费次数已用完，请激活VIP继续体验',
+          };
+        }
+        return {
+          ok: true,
+          playerId: 'p2',
+          sessionId: 's2',
+          room: {
+            code: '123456',
+            hostId: 'p1',
+            level: 'CET4',
+            mode: 'quiz',
+            status: 'waiting',
+            maxPlayers: 2,
+            players: [
+              { id: 'p1', nickname: '房主', ready: false, score: 0, connected: true, isHost: true },
+              { id: 'p2', nickname: 'Tester', ready: false, score: 0, connected: true, isHost: false },
+            ],
+            game: null,
+          },
+        };
+      },
     },
   });
   await flush();
@@ -762,7 +786,7 @@ async function scenarioJoinNeedsCode() {
   env.el('joinBtn')._fire('click');
   await flush();
 
-  assert.equal(env.el('vipOverlay').hidden, false, '未激活点加入应弹遮罩');
+  assert.equal(env.el('vipOverlay').hidden, false, '免费次数用尽时点加入应弹遮罩');
   assert.equal(env.el('vipStepCode').hidden, false, '应显示激活码输入');
 
   env.el('vipCodeInput').value = 'VIP666';

@@ -9,7 +9,7 @@
     device: 'cetArena.deviceToken.v1',
     announcement: 'cetArena.announcementSeen.v1',
   };
-  const APP_VERSION = '20261125-vip21';
+  const APP_VERSION = '20261128-vip22';
 
   const VIEW_IDS = ['loading', 'home', 'room', 'game', 'result', 'solo', 'levels', 'trial', 'marathon'];
 
@@ -937,23 +937,27 @@
     const nickname = getNickname();
     if (!validateNickname(nickname)) return;
 
-    // 未激活：先过 VIP 通道
-    if (!state.vip.verified) {
-      openVipModal('create');
-      return;
-    }
-
+    // 不再在本地拦截非 VIP：统一交给服务端判定（VIP 放行 / 非 VIP 扣每日免费次数）。
     setBusy(el.createBtn, true, '创建中…');
     const result = await request('room:create', { nickname }, 10000);
     setBusy(el.createBtn, false);
 
     if (!result.ok) {
+      if (result.code === 'FREE_LIMIT_REACHED') {
+        showToast(result.error || '今日免费次数已用完，请激活VIP继续体验', 'error');
+        openVipModal('create');
+        return;
+      }
       if (result.code === 'VIP_REQUIRED') {
         openVipModal('create');
         return;
       }
       showHomeError(result.error || '创建房间失败，请重试');
       return;
+    }
+
+    if (typeof result.freeRemaining === 'number') {
+      showToast(`本次为免费体验，今日剩余 ${result.freeRemaining} 次`, 'info');
     }
 
     storageSet(STORAGE.nickname, nickname);
@@ -974,23 +978,27 @@
       return;
     }
 
-    // 加入房间需要自己的激活码
-    if (!state.vip.verified) {
-      openVipModal('join');
-      return;
-    }
-
+    // 同上：加入也由服务端判定，非 VIP 有每日免费额度。
     setBusy(el.joinBtn, true, '加入中…');
     const result = await request('room:join', { nickname, code }, 10000);
     setBusy(el.joinBtn, false);
 
     if (!result.ok) {
+      if (result.code === 'FREE_LIMIT_REACHED') {
+        showToast(result.error || '今日免费次数已用完，请激活VIP继续体验', 'error');
+        openVipModal('join');
+        return;
+      }
       if (result.code === 'VIP_REQUIRED') {
         openVipModal('join');
         return;
       }
       showHomeError(result.error || '加入房间失败，请重试');
       return;
+    }
+
+    if (typeof result.freeRemaining === 'number') {
+      showToast(`本次为免费体验，今日剩余 ${result.freeRemaining} 次`, 'info');
     }
 
     storageSet(STORAGE.nickname, nickname);

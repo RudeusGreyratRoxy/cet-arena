@@ -13,6 +13,7 @@ const { createMessageStore, MAX_CONTENT } = require('./messages');
 const { createAnnouncementStore } = require('./announcement');
 const { createLevelStore } = require('./levels');
 const { createMarathonStore, applyAnswer, normalizeProgress } = require('./marathon');
+const { createDailyLimitStore } = require('./dailyLimits');
 const { APP_VERSION } = require('./version');
 
 const DEFAULT_CONFIG = {
@@ -73,6 +74,8 @@ function createArenaServer(options = {}) {
     options.announcementStore || createAnnouncementStore(options.announcementOptions);
   const levels = options.levels || createLevelStore({ words });
   const marathon = options.marathonStore || createMarathonStore(options.marathonOptions);
+  // 非 VIP 每日免费进场配额（房主建房 / 玩家加入各扣 1 次，每天 2 次）。
+  const dailyLimits = options.dailyLimits || createDailyLimitStore(options.dailyLimitOptions);
   const app = express();
   const httpServer = http.createServer(app);
   const io = new Server(httpServer, {
@@ -1178,6 +1181,33 @@ function createArenaServer(options = {}) {
     }, config.startDelayMs);
   }
 
+  /**
+   * 进场配额：VIP 直接放行且不扣次数；非 VIP 按 deviceHash 扣每日免费次数。
+   * 调用方必须在「参数校验通过、真正建/进房间之前」调用，避免无效请求白白消耗额度。
+   * @returns {{ok: true, free: null} | {ok: true, free: {remaining: number}} | {ok: false, code: string, error: string}}
+   */
+  function consumeEntryQuota(socket) {
+    if (!config.vipRequired || socket.data.vip === true) {
+      return { ok: true, free: null };
+    }
+    const deviceToken =
+      normalizeDeviceToken(socket.data.deviceToken) ||
+      normalizeDeviceToken(socket.handshake.auth && socket.handshake.auth.deviceToken);
+    if (!deviceToken) {
+      return { ok: false, code: 'DEVICE_REQUIRED', error: '设备标识缺失，请刷新页面后重试' };
+    }
+    const quota = dailyLimits.checkAndConsume(deviceHashOf(deviceToken));
+    if (!quota.allowed) {
+      return {
+        ok: false,
+        code: 'FREE_LIMIT_REACHED',
+        error: '今日免费次数已用完，请激活VIP继续体验',
+      };
+    }
+    socket.data.freeEntry = true;
+    return { ok: true, free: { remaining: quota.remaining } };
+  }
+
   function registerSocket(socket) {
     const on = (event, handler) => {
       socket.on(event, (payload, ack) => {
@@ -1788,10 +1818,6 @@ function createArenaServer(options = {}) {
     });
 
     on('room:create', (payload, ack) => {
-      if (config.vipRequired && socket.data.vip !== true) {
-        ack({ ok: false, error: '创建房间需要激活码', code: 'VIP_REQUIRED' });
-        return;
-      }
       if (socket.data.roomCode) {
         ack({ ok: false, error: '你已经在一个房间中' });
         return;
@@ -1804,6 +1830,13 @@ function createArenaServer(options = {}) {
       const level = payload.level === undefined ? 'CET4' : cleanLevel(payload.level);
       if (!level || level === 'CET6') {
         ack({ ok: false, error: '六级词库正在建设中，请先体验四级' });
+        return;
+      }
+
+      // 参数校验通过后才扣配额：无效请求不消耗免费次数。
+      const quota = consumeEntryQuota(socket);
+      if (!quota.ok) {
+        ack({ ok: false, code: quota.code, error: quota.error });
         return;
       }
 
@@ -1827,7 +1860,13 @@ function createArenaServer(options = {}) {
       rooms.set(code, room);
       bindPlayer(socket, room, player);
 
-      ack({ ok: true, playerId: player.id, sessionId: player.sessionId, room: roomView(room) });
+      ack({
+        ok: true,
+        playerId: player.id,
+        sessionId: player.sessionId,
+        room: roomView(room),
+        ...(quota.free ? { freeRemaining: quota.free.remaining, isFreeAttempt: true } : {}),
+      });
       broadcastRoom(room);
       audit('room_created', {
         room: room.code,
@@ -1835,14 +1874,12 @@ function createArenaServer(options = {}) {
         ip: clientIp(socket),
         mode: room.mode,
         level: room.level,
+        free: Boolean(quota.free),
+        freeRemaining: quota.free ? quota.free.remaining : null,
       });
     });
 
     on('room:join', (payload, ack) => {
-      if (config.vipRequired && socket.data.vip !== true) {
-        ack({ ok: false, error: '加入房间需要激活码', code: 'VIP_REQUIRED' });
-        return;
-      }
       if (socket.data.roomCode) {
         ack({ ok: false, error: '你已经在一个房间中' });
         return;
@@ -1871,11 +1908,24 @@ function createArenaServer(options = {}) {
         return;
       }
 
+      // 房间存在且可加入后才扣配额：进不去时不消耗免费次数。
+      const quota = consumeEntryQuota(socket);
+      if (!quota.ok) {
+        ack({ ok: false, code: quota.code, error: quota.error });
+        return;
+      }
+
       const player = newPlayer(nickname);
       room.players.push(player);
       bindPlayer(socket, room, player);
 
-      ack({ ok: true, playerId: player.id, sessionId: player.sessionId, room: roomView(room) });
+      ack({
+        ok: true,
+        playerId: player.id,
+        sessionId: player.sessionId,
+        room: roomView(room),
+        ...(quota.free ? { freeRemaining: quota.free.remaining, isFreeAttempt: true } : {}),
+      });
       broadcastRoom(room);
     });
 

@@ -286,9 +286,10 @@ async function main() {
     ok('原设备再验证被拒（REVOKED）', oldVerify.ok === false && oldVerify.code === 'REVOKED');
 
     await call(socket, 'room:leave', {});
-    const afterKick = await call(socket, 'room:create', { nickname: '设备A' });
+    // 建房/加入已允许非 VIP 走「每日免费额度」，因此改用仍是 VIP 专属的模式验证踢线生效。
+    const afterKick = await call(socket, 'marathon:start', { deviceToken });
     ok(
-      '踢线后需要 VIP 的操作被拦截',
+      '踢线后 VIP 专属操作被拦截',
       afterKick.ok === false && afterKick.code === 'VIP_REQUIRED'
     );
 

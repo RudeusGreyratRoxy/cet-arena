@@ -300,6 +300,7 @@ async function testRoundSwitchOverSocket(dir) {
   if (answered.completed) {
     ok('全对分支：标记通关且剩余 0', answered.round === 1 && answered.remaining === 0);
     ok('全对分支：不再下发题目', answered.question === null);
+    ok('全对分支：错词池为空', answered.wrongPoolSize === 0);
   } else {
     ok('有错词分支：进入第 2 轮', answered.round === 2 && answered.index === 0);
     ok('有错词分支：新一轮题目仍是该错词', answered.question && answered.question.id === 'mwa');

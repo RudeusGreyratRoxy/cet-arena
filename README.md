@@ -12,12 +12,13 @@
 
 ---
 
-仅限两位好友通过 6 位房间码实时对战的大学英语词汇竞技 Web 应用，附带免费单人「限时闯关」与 VIP 专属「错词挑战」两种单机玩法。当前重点建设 CET-4 核心词库与闯关关卡。
+仅限两位好友通过 6 位房间码实时对战的大学英语词汇竞技 Web 应用（非 VIP 每天可免费进场 2 次），附带免费单人「限时闯关」与 VIP 专属「错词挑战」「超长闯关」玩法。当前重点建设 CET-4 核心词库与闯关关卡。
 
 - 后端：Node.js + Express + Socket.IO
 - 前端：原生 HTML / CSS / JavaScript 单页，无构建工具，移动端友好
 - 数据：房间、比分、会话全部保存在服务端内存；词库为本地 JSON
 - 房间：6 位房间码，最多 2 人；房主控制模式和词库范围，双方准备后开始
+- **免费体验（非 VIP）**：双人模式对未激活用户开放「每日 2 次进场」——创建房间与加入房间各扣 1 次，额度按设备（`deviceToken` 的 sha256）在本地日期维度计数，跨天自动重置；耗尽后服务端返回 `FREE_LIMIT_REACHED`，前端弹激活码遮罩并提示「今日免费次数已用完，请激活VIP继续体验」。VIP 进场不消耗额度。额度只在**真正建成/进入房间时**才扣：昵称非法、房间码不存在、房间已满等失败路径不扣次数。
 - 抢答：10 题，15 秒倒计时，先答对 +10 分，答错 −5 分并锁题，超时无人得分
 - 竞速：25 题，双方独立进度，答错 1 秒冷却；一方完成后等待，双方都完成后按总用时、错误数结算
 - 词库：2868 个 CET-4 单词，每个词包含多个带词性、词频权重的释义；CET-6 建设中
@@ -99,7 +100,7 @@ $env:CI="true"
 
 ## 2. 功能与规则
 
-- 首页：填写昵称，创建房间，或输入 6 位数字房间码加入；首页底部另有「限时闯关」（免费）与「错词挑战」（VIP 专属）两个单人入口。
+- 首页：填写昵称，创建房间，或输入 6 位数字房间码加入；**非 VIP 每天可免费进场 2 次**（建房/加入各扣 1 次，用尽后弹激活码遮罩）；首页底部另有「限时闯关」（免费）、「错词挑战」（VIP 专属）与「超长闯关」（VIP 专属）单人入口。
 - 房主在房间准备页通过“词库范围”下拉框选择词库，默认 **CET-4 核心**。
 - 当前已录入 **2868 个 CET-4 单词**；CET-6 词库尚未加入。
 - 选择 CET-6 会提示“六级词库正在建设中，请先体验四级”，并保持 CET-4。
@@ -142,7 +143,7 @@ $env:CI="true"
 - **复盘**：始终展示单词拼写、词性、完整释义和你的对错/未作答标记；答错后纠正的题仍显示为答错。竞速复盘还包含双方进度、用时和错误数。
 - **误词自动入库**：结算复盘渲染时，把「答错」或「曾答错后改正」的单词写入浏览器 localStorage（键 `cetArena.wrongBook.v1`），复盘标题会提示「N 个新错词已存入错词本」；重复答错不重复入库，但连对清零、错误次数 +1。错词本本身只对 VIP 开放。
 - **首页更新公告**：站长在 `/admin` →「公告管理」发布（最多 500 字，保留换行，留空即下架）；首页顶部显示横幅（`textContent` 渲染 + `white-space: pre-wrap`，不解析 HTML）。前端按 `updatedAt` 去重：同一版本关闭后不再弹出，发布新版本才会再次出现。`GET /api/announcement` 公开且 `no-store`，`POST /api/admin/announcement` 需站长登录。
-- **VIP 激活码闸门**：点「创建房间」或「加入房间」都会先弹同一个全屏激活码遮罩；**验证通过后既能建房也能加入**，未验证则两者都被拦截。遮罩内「查看套餐」进入价格页，提供三档：**孤狼独行 ￥19.9（1 个码）/ 双人成行 ￥29.9（2 个码）/ 宿舍开黑 ￥59.9（6 个码）**，点任一购买按钮只提示「支付通道维护中，请联系站长获取激活码」，**不接真实支付、不出现收款码**。验证成功写入 `localStorage`（键 `cetArena.vip.v1`），刷新后自动静默重验；首页底部有「清除激活状态」小字按钮，点击即清空本地激活态并刷新，便于换人使用。；所有套餐**有效期 1 年**，卡密输入框下方标注「⭐ 增值服务：专属定制卡密 +9.9元（需联系站长人工审核生成）」
+- **进场权限（每日免费 + VIP 无限）**：点「创建房间」或「加入房间」时，**前端不再本地拦截**，一律把请求发给服务端判定：VIP 直接放行、不扣次数；非 VIP 由 `dailyLimits.checkAndConsume(deviceHash)` 扣每日免费额度（每天 2 次），成功时 ack 带 `freeRemaining` 与 `isFreeAttempt: true`，前端 toast「本次为免费体验，今日剩余 X 次」；额度耗尽返回 `FREE_LIMIT_REACHED`，前端 toast 后端文案并弹同一个全屏激活码遮罩。**额度只在真正建成/进入房间时扣**：昵称非法、房间码不存在、房间已满等失败路径不扣。遮罩内「查看套餐」进入价格页，提供三档：**孤狼独行 ￥19.9（1 个码）/ 双人成行 ￥29.9（2 个码）/ 宿舍开黑 ￥59.9（6 个码）**，点任一购买按钮只提示「支付通道维护中，请联系站长获取激活码」，**不接真实支付、不出现收款码**。验证成功写入 `localStorage`（键 `cetArena.vip.v1`），刷新后自动静默重验；首页底部有「清除激活状态」小字按钮，点击即清空本地激活态并刷新，便于换人使用。；所有套餐**有效期 1 年**，卡密输入框下方标注「⭐ 增值服务：专属定制卡密 +9.9元（需联系站长人工审核生成）」
 - **关于我们**：首页 Footer 新增「关于我们」入口，点击弹出轻量模态框（复用留言弹窗的遮罩/卡片样式）；文案为静态常量，渲染只用 `textContent`，不拼 HTML。
 - **一码一人**：每个普通激活码只能绑定一台设备。绑定主体是浏览器首次打开页面时生成并持久化在 `localStorage` 的 **device_token**，**不是 IP** —— 大学校园网普遍是 NAT，全校共用一个公网 IP，按 IP 绑定等于「一人买码、全校白嫖」。同一台设备换网络（宿舍 Wi-Fi ↔ 手机热点）照样放行，换设备一律提示「该卡密已绑定其他设备」。IP 只作为风控参考记录。房主建房后，加入者必须**自己**输入有效激活码，没有免码席位。`[已废弃-见环境变量]` 为专属码（现由环境变量 `VIP_UNLIMITED_CODES` 注入），不限次、不绑设备。**后台三种操作**：①「解绑 / 封禁」= 该码对**所有设备**立即失效（原设备进 `revokedDevices` 永久拉黑，且封禁期间**换任何设备/token 都绑不上**）；②「允许换机」= 封禁 → 未使用，**新设备**可重新激活，但原设备仍被永久拉黑；③「彻底删除」= 仅对运行时生成的码（`vip_codes.custom.json`）生效，删除后该码永久消失，种子码受保护。
 - **选项着色**：答对时正确选项标绿、其余弱化；答错时错选标红、正确选项标绿。服务端只在**作答后**才下发 `correctIndex`，避免提前泄题。
@@ -188,7 +189,7 @@ $env:CI="true"
 npm test
 ```
 
-该命令会运行十七套测试：
+该命令会运行十八套测试：
 
 - `test/wrongbook.test.js`：错词本纯逻辑（入库、去重、连对、清零、掌握移除、脏数据容错）。
 - `test/dom-contract.test.js`：`app.js` 引用的 DOM id 全部存在、脚本加载顺序正确。
@@ -202,8 +203,9 @@ npm test
 - `test/env-guard.test.js`：站长密码失效保护——`NODE_ENV=production` 且 `ADMIN_PASSWORD` 缺失或 trim 后为空时，子进程跑 `server.js` 必须以退出码 1 结束并在 stderr 给出明确提示；同时覆盖「完全未设置才回落本地默认值」「空白值抛错」两条解析规则。
 - `test/device-token.test.js`：设备 Token 绑定的**明文行为基线**——首次绑定后 state 里 `boundDevice` 等于传入 token、同设备放行、换设备 `BOUND`、`reset` 封禁后原设备 `REVOKED` 且不影响其他码、`allowRebind` 后新设备可绑且旧设备进 `revokedDevices`、黑名单拦截、`reset` 返回 `previousDevice`（踢线依赖）。并显式断言 `boundDevice` **不是** 64 位 sha256，作为将来哈希化的绊线。
 - `test/marathon.test.js`：超长闯关后端——纯函数 `applyAnswer` 覆盖答对/答错推进、错词入池（同词去重）、队列答完切下一轮、全对通关；存储层覆盖落盘、跨实例（模拟重启）读回、返回副本、`reset`；socket 层覆盖首轮为全量词库、**题目不下发 `correctIndex`**、判分一致、非法选项/缺 `deviceToken`/未开始就答题，以及单题队列触发切轮。
+- `test/dailyLimits.test.js`：每日免费配额纯逻辑——首次消耗剩余 1、第二次剩余 0、第三次被拒（`LIMIT`）、`getRemaining` 只查不扣、注入时钟模拟 23:59 → 次日 00:01 跨天重置、不同设备互不影响、落盘与跨实例读回、`dayKey` 使用本地日期（显式断言凌晨的本地日期与 UTC 日期不同，防止退回 `toISOString`）。
 
-（另有 `room-lifecycle`、`vip`、`admin`、`messages`、`announcement` 五套，覆盖房间回收、激活码、站长后台接口、留言板与首页公告；`admin-ui`、`env-guard`、`device-token` 与 `marathon` 已在上面单列，不重复计数。连同上面 12 套共 **17 套**。）
+（另有 `room-lifecycle`、`vip`、`admin`、`messages`、`announcement` 五套，覆盖房间回收、激活码、站长后台接口、留言板与首页公告；`admin-ui`、`env-guard`、`device-token`、`marathon` 与 `dailyLimits` 已在上面单列，不重复计数。连同上面 13 套共 **18 套**。）
 
 覆盖内容：
 
@@ -473,6 +475,7 @@ cet-arena/
 │  ├─ levels.json          # 闯关关卡（3 关 × 50 词，只存词条 id）
 │  ├─ announcement.json    # 首页公告（运行时状态，不入库，由后台发布）
 │  ├─ marathon_progress.json # 超长闯关进度（按 deviceHash，运行时状态，不入库）
+│  ├─ daily_limits.json     # 非 VIP 每日免费进场配额（按 deviceHash + 本地日期，不入库）
 │  ├─ vip_codes.json       # 激活码种子（只读、入库）
 │  └─ vip_codes.custom.json  # 运行时新增卡密（批量/自定义生成，不入库）
 ├─ public/
@@ -495,6 +498,7 @@ cet-arena/
 │  ├─ app.js                # Express + Socket.IO 房间/抢答/竞速/单人挑战状态机
 │  ├─ levels.js             # 闯关关卡读取与校验（trialPoolFor / listLevels / 每题限时）
 │  ├─ marathon.js           # 超长闯关进度存储与轮次推进（applyAnswer / normalizeProgress / 原子落盘）
+│  ├─ dailyLimits.js        # 非 VIP 每日免费进场配额（本地日期跨天重置 / 查询不落盘）
 │  ├─ adminAuth.js          # 站长后台鉴权（密码校验 / token / 爆破限流）
 │  ├─ messages.js           # 联系站长留言存储（内容校验 / 设备限流 / 原子持久化）
 │  ├─ announcement.js       # 首页公告存储（500 字上限 / 保留换行 / 原子持久化）
@@ -517,6 +521,7 @@ cet-arena/
 │  ├─ env-guard.test.js     # 生产环境缺 ADMIN_PASSWORD 必须拒绝启动（失效保护）
 │  ├─ device-token.test.js  # 设备 Token 绑定明文基线（绑定/换机/黑名单/踢线返回值）
 │  ├─ marathon.test.js      # 超长闯关（轮次推进/错词池/通关/落盘/reset/socket 协议）
+│  ├─ dailyLimits.test.js   # 每日免费配额（2 次上限/跨天重置/查询不扣/落盘/本地日期）
 │  └─ remote-smoke.js       # 公网 WebSocket 完整验收
 ├─ server.js                # 启动入口
 ├─ package.json
@@ -543,6 +548,7 @@ cet-arena/
 - **错词本存储**：`localStorage` 键 `cetArena.wrongBook.v1`，结构为 `{ version: 1, words: [{ word, level, streak, wrongCount, addedAt, updatedAt }] }`。**以单词为唯一键**——服务端复盘条目只有 `word`、没有 `id`（早期版本用 `id` 做键导致写入空数组，已修复并固化为回归测试）；读取时兼容纯字符串数组与带 `id` 的旧格式，损坏数据视为空错词本。
 - **单人挑战协议**：`solo:start / solo:next / solo:answer / solo:quit`。客户端只上传「当前仍未掌握」的单词列表，服务端按单词查词表（大小写不敏感）复现题目并判分；学习进度（连对次数、掌握状态）只存在浏览器，服务端不落库，换设备不互通。**该协议仅对 `socket.data.vip === true` 开放**，未激活连接一律返回 `VIP_REQUIRED`。
 - **限时闯关协议**：`trial:levels / trial:start / trial:answer / trial:next / trial:quit`，与错词挑战完全分离，免费可用。题目由服务端按关卡词池生成（客户端不能指定单词），每题下发 `deadline` 与 `timeLimitMs`；前端倒计时只负责展示与到点自动提交，**服务端按 `deadline + 300ms` 网络宽限复核**，迟到或 `index=null` 一律判超时答错，未作答直接点下一题同样记为错误。
+- **每日免费进场配额**：`src/dailyLimits.js` 按 `deviceHash`（`sha256(deviceToken)`）记 `{ day, used }`，落 `data/daily_limits.json`（gitignore）。`checkAndConsume()` 在 `room:create` / `room:join` **参数校验通过后、真正建房/加入前**调用：跨天自动把 `used` 视为 0，`used >= 2` 返回 `LIMIT`（不写盘、不叠加），否则 `used+1` 原子落盘。`getRemaining()` 只读、跨天也不写盘。日期用 `getFullYear/getMonth/getDate` 拼 `YYYY-MM-DD`，**不用 `toISOString`**——服务器 TZ 为 `Asia/Shanghai`，UTC 日期会让每天 00:00–08:00 的配额错位。VIP 走 `socket.data.vip === true` 直接放行、完全不碰该存储。
 - **超长闯关协议（marathon）**：`marathon:start / marathon:answer / marathon:reset`，**VIP 专属**——`marathon:start` 在 `config.vipRequired` 且 `socket.data.vip !== true` 时直接返回 `VIP_REQUIRED`，**在创建进度之前拦截**，因此免费用户既拿不到题目也不会在磁盘上留下记录。按 `deviceToken` 的 sha256（`deviceHash`）归属，进度落 `data/marathon_progress.json`（gitignore）。首轮把全量词 ID 洗牌成队列；`applyAnswer()` 纯函数负责推进：答对/答错都前进一格，答错的词 ID 进 `wrongPool`（同词去重），队列走完时错词池非空则洗牌成下一轮、为空则标记 `completed`。**存储只放词 ID 与轮次/下标，不存题目与答案**；每题由 `buildQuestion()` 现场生成，`correctIndex` 只在作答 ack 里下发。`normalizeProgress()` 会在词库缩水或下标越界时自动收口（切轮或判通关），避免卡死。重置需前端二次确认，服务端删除该 `deviceHash` 记录并清空当前 socket 会话。
 - **关卡数据**：`data/levels.json` 只存「关卡 → 词条 id 列表」，不往 `words.json` 里加 chapter 字段——词库是扁平的 2868 词，闯关只是它的一种视图，避免污染词库结构与音频/体检脚本。启动时校验：关卡 id 唯一、单关 ≥4 词（够 3 个干扰项）、引用的 id 必须存在于词库、免费关卡合集 ≥25 词（够竞速 25 题）。
 - **单题生成复用**：把 `buildQuestion(entry, pool, type)` 从 `buildQuestions` 中抽出，单人挑战与双人对战共用同一套题型判定、干扰项与选项打乱逻辑，避免两套出题规则漂移。
@@ -669,6 +675,9 @@ cet-arena/
 - [x] 点「创建房间」弹房主通道、点「加入房间」弹单人通道，两个弹窗文案与校验独立
 - [x] 价格页提供三档套餐：孤狼独行 ￥19.9（1 码）/ 双人成行 ￥29.9（2 码）/ 宿舍开黑 ￥59.9（6 码），点任一按钮只提示维护中且无收款码
 - [x] 任意有效激活码验证后既能建房也能加入；未验证两者都被拦截
+- [x] **非 VIP 每日免费 2 次进场**：首次建房放行（ack `freeRemaining: 1`）、第二次放行（`0`）、第三次返回 `FREE_LIMIT_REACHED` 并弹激活码遮罩；VIP 建房/加入不返回免费标记且不消耗额度
+- [x] 免费额度只在真正建成/进入房间时扣：昵称非法、房间码不存在、房间已满均不扣次数
+- [x] 额度按设备哈希 + **本地日期**（Asia/Shanghai）计数，跨天自动重置；`data/daily_limits.json` 已 gitignore
 - [x] 特殊码（[已废弃-见环境变量]）不限次、不绑设备
 - [x] 普通码必须携带 `device_token`，缺失或格式非法一律拒绝
 - [x] 后台封禁后，原设备与任何新设备/token 均无法激活（`REVOKED`），只能由站长「允许换机」后新设备才可绑
@@ -679,7 +688,7 @@ cet-arena/
 - [x] 同一台设备换 IP（宿舍 Wi-Fi ↔ 手机热点）仍可正常验证
 - [x] 旧数据（只有 boundIp、没有设备 Token）在同 IP 首次带 Token 时可平滑迁移
 - [x] 真机双浏览器验收：两个独立浏览器配置（不同 `device_token`、同一 IP）跑通上述拦截流程
-- [x] 自动化 `npm test` 通过（错词本 + DOM 契约 + 单人 UI + 单人协议 + 限时闯关 + 房间生命周期 + 激活码 + 抢答 + 竞速 + 混合题型 + 站长后台 + 留言板 + 生产环境密码守卫 + 设备 Token 基线 + 超长闯关，共 17 套）
+- [x] 自动化 `npm test` 通过（错词本 + DOM 契约 + 单人 UI + 单人协议 + 限时闯关 + 房间生命周期 + 激活码 + 抢答 + 竞速 + 混合题型 + 站长后台 + 留言板 + 生产环境密码守卫 + 设备 Token 基线 + 超长闯关 + 每日免费配额，共 18 套）
 
 ### 声音唤醒与留言板测试清单
 

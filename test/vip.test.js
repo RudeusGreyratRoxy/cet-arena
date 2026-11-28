@@ -9,11 +9,13 @@
  */
 
 const assert = require('assert/strict');
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { io } = require('socket.io-client');
 const { createVipStore, normalizeDeviceToken, hashDevice } = require('../src/vipCodes');
 const { createArenaServer } = require('../src/app');
+const { createDailyLimitStore } = require('../src/dailyLimits');
 const { APP_VERSION } = require('../src/version');
 
 const dir = fs.mkdtempSync(path.join(__dirname, '.tmp-vip-'));
@@ -56,12 +58,12 @@ const DEVICE_A = 'a1b2c3d4e5f60718293a4b5c6d7e8f90';
 const DEVICE_B = 'ffeeddccbbaa99887766554433221100';
 const DEVICE_C = '0123456789abcdef0123456789abcdef';
 
-function connect(url, ip) {
+function connect(url, ip, deviceToken) {
   return new Promise((resolve, reject) => {
     const socket = io(url, {
       forceNew: true,
       reconnection: false,
-      auth: { clientVersion: APP_VERSION },
+      auth: { clientVersion: APP_VERSION, ...(deviceToken ? { deviceToken } : {}) },
       timeout: 5000,
       transports: ['websocket', 'polling'],
       extraHeaders: { 'x-forwarded-for': ip },
@@ -263,21 +265,64 @@ async function main() {
     ok('删除后 state 记录已清理', !JSON.parse(fs.readFileSync(statePath, 'utf8')).DELME01);
     ok('种子码不允许删除', s9.removeCode('VIP666').code === 'SEED_PROTECTED');
 
-    console.log('=== 10. 建房 / 加入闸门（socket 集成）===');
+    console.log('=== 10. 建房 / 加入：非 VIP 每日免费额度 + VIP 不扣次数 ===');
     resetState();
-    const arena = createArenaServer({ vipRequired: true, vipOptions: { seedPath, statePath } });
+    const dailyLimitPath = path.join(dir, 'daily_limits.json');
+    const arena = createArenaServer({
+      vipRequired: true,
+      vipOptions: { seedPath, statePath },
+      dailyLimitOptions: { file: dailyLimitPath },
+    });
     await new Promise((resolve) => arena.httpServer.listen(0, '127.0.0.1', resolve));
     const { port } = arena.httpServer.address();
     const url = `http://127.0.0.1:${port}`;
 
-    const guest = await connect(url, '10.2.0.1');
-    const gCreate = await call(guest, 'room:create', { nickname: 'Guest' });
-    const gJoin = await call(guest, 'room:join', { nickname: 'Guest', code: '123456' });
-    ok('未激活不能建房', gCreate.ok === false && gCreate.code === 'VIP_REQUIRED');
-    ok('未激活不能加入', gJoin.ok === false && gJoin.code === 'VIP_REQUIRED');
-    guest.close();
+    const DEVICE_GUEST = '00112233445566778899aabbccddeeff';
+    const guestKey = crypto.createHash('sha256').update(DEVICE_GUEST).digest('hex');
+    const dailyStore = () => createDailyLimitStore({ file: dailyLimitPath });
+    const keyOf = (token) => crypto.createHash('sha256').update(token).digest('hex');
 
-    const host = await connect(url, '10.2.0.2');
+    // 完全没有设备标识：无法归属每日免费额度，直接拒绝
+    const anon = await connect(url, '10.2.0.1');
+    const anonCreate = await call(anon, 'room:create', { nickname: 'Guest' });
+    ok(
+      '非 VIP 且缺设备标识时被拒（DEVICE_REQUIRED）',
+      anonCreate.ok === false && anonCreate.code === 'DEVICE_REQUIRED'
+    );
+    anon.close();
+
+    // 非 VIP 第 1 次：放行并返回剩余次数
+    const guest1 = await connect(url, '10.2.0.2', DEVICE_GUEST);
+    const g1 = await call(guest1, 'room:create', { nickname: 'Guest' });
+    ok(
+      '非 VIP 首次建房放行（免费体验，剩余 1 次）',
+      g1.ok === true && g1.isFreeAttempt === true && g1.freeRemaining === 1
+    );
+    guest1.close();
+
+    // 进不去的房间不扣额度：房间码不存在
+    const guestMiss = await connect(url, '10.2.0.2', DEVICE_GUEST);
+    const gMiss = await call(guestMiss, 'room:join', { nickname: 'Guest', code: '123456' });
+    ok('加入不存在的房间失败', gMiss.ok === false);
+    ok('进不去房间时不消耗免费额度', dailyStore().getRemaining(guestKey) === 1);
+    guestMiss.close();
+
+    // 非 VIP 第 2 次：放行，剩余 0
+    const guest2 = await connect(url, '10.2.0.3', DEVICE_GUEST);
+    const g2 = await call(guest2, 'room:create', { nickname: 'Guest2' });
+    ok('非 VIP 第 2 次建房放行（剩余 0 次）', g2.ok === true && g2.freeRemaining === 0);
+    guest2.close();
+
+    // 非 VIP 第 3 次：拒绝
+    const guest3 = await connect(url, '10.2.0.4', DEVICE_GUEST);
+    const g3 = await call(guest3, 'room:create', { nickname: 'Guest3' });
+    ok('非 VIP 第 3 次建房被拒（FREE_LIMIT_REACHED）', g3.ok === false && g3.code === 'FREE_LIMIT_REACHED');
+    ok('被拒文案引导激活 VIP', /VIP/.test(g3.error || ''));
+    ok('被拒后仍不包含房间信息', !g3.room);
+    guest3.close();
+
+    // VIP：正常建房，且完全不消耗每日免费额度
+    const host = await connect(url, '10.2.0.5', DEVICE_A);
     const noToken = await call(host, 'vip:verify', { code: 'VIP888' });
     ok('socket 不带 deviceToken 被拒', noToken.ok === false && noToken.code === 'DEVICE_REQUIRED');
 
@@ -285,23 +330,27 @@ async function main() {
     ok('普通码验证通过', hv.ok === true && hv.kind === 'once');
     const created = await call(host, 'room:create', { nickname: '房主' });
     ok('验证后可建房', created.ok === true && /^\d{6}$/.test(created.room.code));
+    ok('VIP 建房不返回免费体验标记', created.isFreeAttempt === undefined);
+    ok('VIP 建房不消耗免费额度', dailyStore().getRemaining(keyOf(DEVICE_A)) === 2);
 
     // 同一公网 IP 下的另一台设备（同一校园网），拿同一个码尝试
-    const neighbor = await connect(url, '10.2.0.2');
+    const neighbor = await connect(url, '10.2.0.5', DEVICE_B);
     const stolen = await call(neighbor, 'vip:verify', { code: 'VIP888', deviceToken: DEVICE_B });
     ok('同 IP 的邻居设备无法复用该码', stolen.ok === false && stolen.code === 'BOUND');
     neighbor.close();
 
-    const joiner = await connect(url, '10.2.0.3');
+    const joiner = await connect(url, '10.2.0.6', DEVICE_B);
     const jv = await call(joiner, 'vip:verify', { code: 'VIP666', deviceToken: DEVICE_B });
     ok('第二名玩家用自己的码验证通过', jv.ok === true);
     const joined = await call(joiner, 'room:join', { nickname: '队友', code: created.room.code });
     ok('验证后可加入他人房间', joined.ok === true && joined.room.players.length === 2);
 
-    const noCode = await connect(url, '10.2.0.4');
-    const nc = await call(noCode, 'room:join', { nickname: '白嫖', code: created.room.code });
-    ok('没码的人无法挤进房间', nc.ok === false && nc.code === 'VIP_REQUIRED');
-    noCode.close();
+    // 房间已满时，免费玩家进不去，也不该扣额度
+    const full = await connect(url, '10.2.0.7', DEVICE_C);
+    const fullJoin = await call(full, 'room:join', { nickname: '白嫖', code: created.room.code });
+    ok('房间已满时加入失败', fullJoin.ok === false);
+    ok('进房失败不消耗免费额度', dailyStore().getRemaining(keyOf(DEVICE_C)) === 2);
+    full.close();
 
     host.close();
     joiner.close();
